@@ -61,6 +61,7 @@
  - Diffusers Hub Down-Loader: Download a diffusers model from the HuggingFace Hub and load it
  - Image SSAO (Ambient Occlusion): [Expiremental Beta Node] Create Screen Space Ambient Occlusion with a image and MiDaS depth approximation (or provided depth map).
  - Image SSDO (Direct Occlusion): [Expiremental Beta Node] Create a Screen Space Direct Occlusion with a image input. Direct Occlusion presents you with direct lighting highliths, similar to how Ambient Occlusion finds the crevices and shadowy areas around objets.
+ - Image Aspect Ratio: Fetch image aspect ratio in float format, common format (eg 16:9), and in if the image is portrait, landscape, or square.
  - Image Batch: Create one batch out of multiple batched tensors.
  - Image Blank: Create a blank image in any color
  - Image Blend by Mask: Blend two images by a mask
@@ -240,7 +241,7 @@
  ### Notes:
  
   - **CLIPTextEncode (NSP)** and **CLIPTextEncode (BlenderNeko Advanced + NSP)**: Accept dynamic prompts in `<option1|option2|option3>` format. This will respect the nodes input seed to yield reproducible results like NSP and Wildcards. 
-  - **CLIPTextEncode (NSP)** and **CLIPTextEncode (BlenderNeko Advanced + NSP)**: Assign variables with `$|prompt words|$` format. You can then print this word again within the prompt with the number corresponding the order you created them. So the first prompt var would be printed with `$1` and the second with `$1` and so on.
+  - **CLIPTextEncode (NSP)** and **CLIPTextEncode (BlenderNeko Advanced + NSP)**: Assign variables with `$|prompt words|$` format. You can then print this word again within the prompt with the number corresponding the order you created them. So the first prompt var would be printed with `$1` and the second with `$2` and so on.
  
 ---
  
@@ -342,6 +343,8 @@ You can set `webui_styles_persistent_update` to `true` to update the WAS Node Su
   
 # Recommended Installation:
 If you're running on Linux, or non-admin account on windows you'll want to ensure `/ComfyUI/custom_nodes`, `was-node-suite-comfyui`, and `WAS_Node_Suite.py` has write permissions.
+
+There is now a **install.bat** you can run to install to portable if detected. Otherwise it will default to system and assume you followed ConfyUI's manual installation steps. 
 
   - Navigate to your `/ComfyUI/custom_nodes/` folder
   - Run `git clone https://github.com/WASasquatch/was-node-suite-comfyui/`

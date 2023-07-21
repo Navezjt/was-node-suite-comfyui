@@ -475,7 +475,7 @@ def nsp_parse(text, seed=0, noodle_key='__', nspterminology=None, pantry_path=No
         for _ in range(tcount):
             new_text = new_text.replace(
                 tkey, random.choice(nspterminology[term]), 1)
-            seed = seed + 1
+            seed += 1
             random.seed(seed)
 
     return new_text
@@ -483,6 +483,21 @@ def nsp_parse(text, seed=0, noodle_key='__', nspterminology=None, pantry_path=No
 # Simple wildcard parser:
 
 def replace_wildcards(text, seed=None, noodle_key='__'):
+
+    def replace_nested(text, key_path_dict):
+        if re.findall(f"{noodle_key}(.+?){noodle_key}", text):
+            for key, file_path in key_path_dict.items():
+                with open(file_path, "r", encoding="utf-8") as file:
+                    lines = file.readlines()
+                    if lines:
+                        random_line = None
+                        while not random_line:
+                            line = random.choice(lines).strip()
+                            if not line.startswith('#') and not line.startswith('//'):
+                                random_line = line
+                        text = text.replace(key, random_line)
+        return text
+
     conf = getSuiteConfig()
     wildcard_dir = os.path.join(WAS_SUITE_ROOT, 'wildcards')
     if not os.path.exists(wildcard_dir):
@@ -516,6 +531,9 @@ def replace_wildcards(text, seed=None, noodle_key='__'):
                     if not line.startswith('#') and not line.startswith('//'):
                         random_line = line
                 text = text.replace(key, random_line)
+                
+    # Replace sub-wildacrds in result
+    text = replace_nested(text, key_path_dict)
 
     return text
     
@@ -1225,7 +1243,7 @@ class WAS_Tools_Class():
 
                 out.release()
 
-                cstr("Created new video at: {video_path}").msg.print()
+                cstr(f"Created new video at: {video_path}").msg.print()
 
                 return video_path
 
@@ -8296,8 +8314,10 @@ class WAS_NSP_CLIPTextEncoder:
         new_text = parse_dynamic_prompt(new_text, seed)
         new_text, text_vars = parse_prompt_vars(new_text)
         cstr(f"CLIPTextEncode Prased Prompt:\n {new_text}").msg.print()
+        CLIPTextEncode = nodes.CLIPTextEncode()
+        encoded = CLIPTextEncode.encode(clip=clip, text=new_text)
         
-        return ([[clip.encode(new_text), {}]], new_text, text, { "ui": { "string": new_text } })
+        return (encoded[0], new_text, text, { "ui": { "string": new_text } })
 
 
 #! SAMPLING NODES
@@ -10927,7 +10947,7 @@ class WAS_Random_Number:
             }
         }
 
-    RETURN_TYPES = ("NUMBER",)
+    RETURN_TYPES = ("NUMBER", "FLOAT", "INT")
     FUNCTION = "return_randm_number"
 
     CATEGORY = "WAS Suite/Number"
@@ -10949,7 +10969,7 @@ class WAS_Random_Number:
                 return
 
         # Return number
-        return (number, )
+        return (number, float(number), int(number))
         
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -10971,7 +10991,7 @@ class WAS_True_Random_Number:
             }
         }
 
-    RETURN_TYPES = ("NUMBER",)
+    RETURN_TYPES = ("NUMBER", "FLOAT", "INT")
     FUNCTION = "return_true_randm_number"
 
     CATEGORY = "WAS Suite/Number"
@@ -11010,7 +11030,7 @@ class WAS_True_Random_Number:
         if response.status_code == 200:
             data = response.json()
             if "result" in data:
-                return data["result"]["random"]["data"]
+                return data["result"]["random"]["data"], float(data["result"]["random"]["data"]), int(data["result"]["random"]["data"])
                 
         return [0]
         
@@ -11034,7 +11054,7 @@ class WAS_Constant_Number:
             }
         }
 
-    RETURN_TYPES = ("NUMBER",)
+    RETURN_TYPES = ("NUMBER", "FLOAT", "INT")
     FUNCTION = "return_constant_number"
 
     CATEGORY = "WAS Suite/Number"
@@ -11050,7 +11070,54 @@ class WAS_Constant_Number:
             elif number_type == 'bool':
                 return ((1 if int(number) > 0 else 0), )
             else:
-                return (number, )
+                return (number, float(number), int(number) )
+
+# INCREMENT NUMBER
+
+class WAS_Number_Counter:
+    def __init__(self):
+        self.counters = {}
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "counter_id": ("STRING", {"default": "counter_001", "multiline": False}),
+                "number_type": (["integer", "float"],),
+                "mode": (["increment", "decrement"],),
+                "start": ("FLOAT", {"default": 0, "min": -18446744073709551615, "max": 18446744073709551615, "step": 0.01}),
+                "step": ("FLOAT", {"default": 1, "min": 0, "max": 99999, "step": 0.01}), 
+            }
+        }
+            
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("NaN")
+
+    RETURN_TYPES = ("NUMBER", "FLOAT", "INT")
+    RETURN_NAMES = ("number", "float", "int")
+    FUNCTION = "increment_number"
+
+    CATEGORY = "WAS Suite/Number"
+
+    def increment_number(self, counter_id, number_type, mode, start, step):
+
+        counter = int(start) if mode == 'integer' else start
+        if self.counters.__contains__(counter_id):
+            counter = self.counters[counter_id]
+            
+        if mode == 'increment':
+            counter += step
+        else:
+            counter -= step
+            
+        self.counters[counter_id] = counter
+        
+        result = int(counter) if number_type == 'integer' else float(counter)
+        
+        return ( result, float(counter), int(counter) )
+            
+        
 
 
 # NUMBER TO SEED
@@ -11228,13 +11295,13 @@ class WAS_Number_PI:
             "required": {}
         }
 
-    RETURN_TYPES = ("NUMBER",)
+    RETURN_TYPES = ("NUMBER", "FLOAT")
     FUNCTION = "number_pi"
 
     CATEGORY = "WAS Suite/Number"
 
     def number_pi(self):
-        return (math.pi, )
+        return (math.pi, math.pi)
         
 # Boolean
 
@@ -11250,13 +11317,13 @@ class WAS_Boolean:
             }
         }
 
-    RETURN_TYPES = ("NUMBER",)
+    RETURN_TYPES = ("NUMBER","INT")
     FUNCTION = "return_boolean"
 
     CATEGORY = "WAS Suite/Logic"
 
     def return_boolean(self, boolean_number=1):
-        return (int(boolean_number), )
+        return (int(boolean_number), int(boolean_number))
 
 # NUMBER OPERATIONS
 
@@ -11275,43 +11342,56 @@ class WAS_Number_Operation:
             }
         }
 
-    RETURN_TYPES = ("NUMBER",)
+    RETURN_TYPES = ("NUMBER", "FLOAT", "INT")
     FUNCTION = "math_operations"
 
     CATEGORY = "WAS Suite/Number/Operations"
 
     def math_operations(self, number_a, number_b, operation="addition"):
-
+    
         # Return random number
         if operation:
             if operation == 'addition':
-                return ((number_a + number_b), )
+                result = (number_a + number_b)
+                return result, result, int(result)
             elif operation == 'subtraction':
-                return ((number_a - number_b), )
+                result = (number_a - number_b)
+                return result, result, int(result)
             elif operation == 'division':
-                return ((number_a / number_b), )
+                result = (number_a / number_b)
+                return result, result, int(result)
             elif operation == 'floor division':
-                return ((number_a // number_b), )
+                result = (number_a // number_b)
+                return result, result, int(result)
             elif operation == 'multiplication':
-                return ((number_a * number_b), )
+                result = (number_a * number_b)
+                return result, result, int(result)
             elif operation == 'exponentiation':
-                return ((number_a ** number_b), )
+                result = (number_a ** number_b)
+                return result, result, int(result)
             elif operation == 'modulus':
-                return ((number_a % number_b), )
+                result = (number_a % number_b)
+                return result, result, int(result)
             elif operation == 'greater-than':
-                return (+(number_a > number_b), )
+                result = +(number_a > number_b)
+                return result, result, int(result)
             elif operation == 'greater-than or equals':
-                return (+(number_a >= number_b), )
+                result = +(number_a >= number_b)
+                return result, result, int(result)
             elif operation == 'less-than':
-                return (+(number_a < number_b), )
+                result = +(number_a < number_b)
+                return result, result, int(result)
             elif operation == 'less-than or equals':
-                return (+(number_a <= number_b), )
+                result = +(number_a <= number_b)
+                return result, result, int(result)
             elif operation == 'equals':
-                return (+(number_a == number_b), )
+                result = +(number_a == number_b)
+                return result, result, int(result)
             elif operation == 'does not equal':
-                return (+(number_a != number_b), )
+                result = +(number_a != number_b)
+                return result, result, int(result)
             else:
-                return (number_a, )
+                return (number_a, number_a, int(number_a))
 
 # NUMBER MULTIPLE OF
 
@@ -11328,7 +11408,7 @@ class WAS_Number_Multiple_Of:
             }
         }
     
-    RETURN_TYPES =("NUMBER",)
+    RETURN_TYPES =("NUMBER", "FLOAT", "INT")
     FUNCTION = "number_multiple_of"
     
     CATEGORY = "WAS Suite/Number/Functions"
@@ -11336,7 +11416,7 @@ class WAS_Number_Multiple_Of:
     def number_multiple_of(self, number, multiple=8):
         if number % multiple != 0:
             return ((number // multiple) * multiple + multiple, )
-        return (number, )
+        return (number, number, int(number))
 
 
 #! MISC
@@ -11355,8 +11435,8 @@ class WAS_Image_Size_To_Number:
             }
         }
 
-    RETURN_TYPES = ("NUMBER", "NUMBER",)
-    RETURN_NAMES = ("width_num", "height_num",)
+    RETURN_TYPES = ("NUMBER", "NUMBER", "FLOAT", "FLOAT", "INT", "INT")
+    RETURN_NAMES = ("width_num", "height_num", "width_float", "height_float", "width_int", "height_int")
     FUNCTION = "image_width_height"
 
     CATEGORY = "WAS Suite/Number/Operations"
@@ -11364,8 +11444,8 @@ class WAS_Image_Size_To_Number:
     def image_width_height(self, image):
         image = tensor2pil(image)
         if image.size:
-            return( image.size[0], image.size[1] )
-        return ( 0, 0 )
+            return( image.size[0], image.size[1], float(image.size[0]), float(image.size[1]), image.size[0], image.size[1] )
+        return ( 0, 0, 0, 0, 0, 0)
         
         
 # Latent Width and Height to Number
@@ -11382,7 +11462,7 @@ class WAS_Latent_Size_To_Number:
             }
         }
 
-    RETURN_TYPES = ("NUMBER","NUMBER")
+    RETURN_TYPES = ("NUMBER", "NUMBER", "FLOAT", "FLOAT", "INT", "INT")
     RETURN_NAMES = ("tensor_w_num","tensor_h_num")
     FUNCTION = "latent_width_height"
 
@@ -11398,7 +11478,7 @@ class WAS_Latent_Size_To_Number:
             tensor_height = shape[-2]
             tensor_width = shape[-1]
             size_dict.update({i:[tensor_width, tensor_height]})
-        return (size_dict[0][0], size_dict[0][1])
+        return ( size_dict[0][0], size_dict[0][1], float(size_dict[0][0]), float(size_dict[0][1]), size_dict[0][0], size_dict[0][1] )
         
             
 # LATENT INPUT SWITCH
@@ -11446,7 +11526,7 @@ class WAS_Number_Input_Condition:
             }
         }
 
-    RETURN_TYPES = ("NUMBER",)
+    RETURN_TYPES = ("NUMBER", "FLOAT", "INT")
     FUNCTION = "number_input_condition"
 
     CATEGORY = "WAS Suite/Logic"
@@ -11513,7 +11593,7 @@ class WAS_Number_Input_Condition:
                 else:
                     result = number_a
 
-        return (result,)
+        return (result, float(result), int(result))
         
     def is_prime(self, n):
         if n <= 1:
@@ -11529,6 +11609,53 @@ class WAS_Number_Input_Condition:
             i += 6
         return True
         
+# ASPECT RATIO
+
+class WAS_Image_Aspect_Ratio:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "optional": {
+                "image": ("IMAGE",),
+                "width": ("NUMBER",),
+                "height": ("NUMBER",),
+            }
+        }
+
+    RETURN_TYPES = ("NUMBER", "FLOAT", "NUMBER", TEXT_TYPE, TEXT_TYPE)
+    RETURN_NAMES = ("aspect_number", "aspect_float", "is_landscape_bool", "aspect_ratio_common", "aspect_type")
+    FUNCTION = "aspect"
+
+    CATEGORY = "WAS Suite/Logic"
+
+    def aspect(self, boolean_number=1, image=None, width=None, height=None):
+
+        if width and height:
+            width = width; height = height
+        elif image is not None:
+            width, height = tensor2pil(image).size
+        else:
+            raise Exception("WAS_Image_Aspect_Ratio must have width and height provided if no image tensori supplied.")
+
+        aspect_ratio = width / height
+        aspect_type = "landscape" if aspect_ratio > 1 else "portrait" if aspect_ratio < 1 else "square"
+
+        landscape_bool = 0
+        if aspect_type == "landscape":
+            landscape_bool = 1
+
+        gcd = math.gcd(width, height)
+        gcd_w = width // gcd
+        gcd_h = height // gcd
+        aspect_ratio_common = f"{gcd_w}:{gcd_h}"
+
+        return aspect_ratio, aspect_ratio, landscape_bool, aspect_ratio_common, aspect_type
+
+            
 # NUMBER INPUT SWITCH
 
 class WAS_Number_Input_Switch:
@@ -11545,7 +11672,7 @@ class WAS_Number_Input_Switch:
             }
         }
 
-    RETURN_TYPES = ("NUMBER",)
+    RETURN_TYPES = ("NUMBER", "FLOAT", "INT")
     FUNCTION = "number_input_switch"
 
     CATEGORY = "WAS Suite/Logic"
@@ -11553,9 +11680,9 @@ class WAS_Number_Input_Switch:
     def number_input_switch(self, number_a, number_b, boolean_number=1):
 
         if int(boolean_number) == 1:
-            return (number_a, )
+            return (number_a, float(number_a), int(number_a))
         else:
-            return (number_b, )
+            return (number_b, float(number_b), int(number_b))
             
             
 # IMAGE INPUT SWITCH
@@ -11853,7 +11980,7 @@ class WAS_Checkpoint_Loader:
     def INPUT_TYPES(s):
         return {"required": { "config_name": (comfy_paths.get_filename_list("configs"), ),
                               "ckpt_name": (comfy_paths.get_filename_list("checkpoints"), )}}
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING")
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE", TEXT_TYPE)
     RETURN_NAMES = ("MODEL", "CLIP", "VAE", "NAME_STRING")
     FUNCTION = "load_checkpoint"
 
@@ -11870,7 +11997,7 @@ class WAS_Checkpoint_Loader:
     def INPUT_TYPES(s):
         return {"required": { "config_name": (comfy_paths.get_filename_list("configs"), ),
                               "ckpt_name": (comfy_paths.get_filename_list("checkpoints"), )}}
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING")
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE", TEXT_TYPE)
     RETURN_NAMES = ("MODEL", "CLIP", "VAE", "NAME_STRING")
     FUNCTION = "load_checkpoint"
 
@@ -11887,7 +12014,7 @@ class WAS_Diffusers_Hub_Model_Loader:
     def INPUT_TYPES(s):
         return {"required": { "repo_id": ("STRING", {"multiline":False}),
                               "revision": ("STRING", {"default": "None", "multiline":False})}}
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING")
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE", TEXT_TYPE)
     RETURN_NAMES = ("MODEL", "CLIP", "VAE", "NAME_STRING")
     FUNCTION = "load_hub_checkpoint"
 
@@ -11916,7 +12043,7 @@ class WAS_Checkpoint_Loader_Simple:
     def INPUT_TYPES(s):
         return {"required": { "ckpt_name": (comfy_paths.get_filename_list("checkpoints"), ),
                              }}
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING")
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE", TEXT_TYPE)
     RETURN_NAMES = ("MODEL", "CLIP", "VAE", "NAME_STRING")
     FUNCTION = "load_checkpoint"
 
@@ -11935,7 +12062,7 @@ class WAS_Diffusers_Loader:
             if os.path.exists(search_path):
                 paths += next(os.walk(search_path))[1]
         return {"required": {"model_path": (paths,), }}
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING")
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE", TEXT_TYPE)
     RETURN_NAMES = ("MODEL", "CLIP", "VAE", "NAME_STRING")
     FUNCTION = "load_checkpoint"
 
@@ -11970,6 +12097,9 @@ class WAS_unCLIP_Checkpoint_Loader:
         return (out[0], out[1], out[2], out[3], os.path.splitext(os.path.basename(ckpt_name))[0])
 
 class WAS_Lora_Loader:
+    def __init__(self):
+        self.loaded_lora = None;
+        
     @classmethod
     def INPUT_TYPES(s):
         file_list = comfy_paths.get_filename_list("loras")
@@ -11980,19 +12110,29 @@ class WAS_Lora_Loader:
                               "strength_model": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
                               "strength_clip": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
                               }}
-    RETURN_TYPES = ("MODEL", "CLIP", "STRING")
+    RETURN_TYPES = ("MODEL", "CLIP", TEXT_TYPE)
     RETURN_NAMES = ("MODEL", "CLIP", "NAME_STRING")
     FUNCTION = "load_lora"
 
     CATEGORY = "WAS Suite/Loaders"
 
     def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
-        if lora_name == 'None':
-            lora_name = file_list = comfy_paths.get_filename_list("loras")[0]
-            strength_model = 0.0
-            strength_clip = 0.0
+        if strength_model == 0 and strength_clip == 0:
+            return (model, clip)
+
         lora_path = comfy_paths.get_full_path("loras", lora_name)
-        model_lora, clip_lora = comfy.sd.load_lora_for_models(model, clip, lora_path, strength_model, strength_clip)
+        lora = None
+        if self.loaded_lora is not None:
+            if self.loaded_lora[0] == lora_path:
+                lora = self.loaded_lora[1]
+            else:
+                del self.loaded_lora
+
+        if lora is None:
+            lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+            self.loaded_lora = (lora_path, lora)
+
+        model_lora, clip_lora = comfy.sd.load_lora_for_models(model, clip, lora, strength_model, strength_clip)
         return (model_lora, clip_lora, os.path.splitext(os.path.basename(lora_name))[0])
         
 class WAS_Upscale_Model_Loader:
@@ -12476,6 +12616,7 @@ NODE_CLASS_MAPPINGS = {
     "Image SSAO (Ambient Occlusion)": WAS_Image_Ambient_Occlusion,
     "Image SSDO (Direct Occlusion)": WAS_Image_Direct_Occlusion,
     "Image Analyze": WAS_Image_Analyze,
+    "Image Aspect Ratio": WAS_Image_Aspect_Ratio, 
     "Image Batch": WAS_Image_Batch,
     "Image Blank": WAS_Image_Blank,
     "Image Blend by Mask": WAS_Image_Blend_Mask,
@@ -12570,6 +12711,7 @@ NODE_CLASS_MAPPINGS = {
     "MiDaS Depth Approximation": MiDaS_Depth_Approx,
     "MiDaS Mask Image": MiDaS_Background_Foreground_Removal,
     "Model Input Switch": WAS_Model_Input_Switch,
+    "Number Counter": WAS_Number_Counter,
     "Number Operation": WAS_Number_Operation,
     "Number to Float": WAS_Number_To_Float,
     "Number Input Switch": WAS_Number_Input_Switch,
@@ -12687,9 +12829,8 @@ if os.path.exists(BKAdvCLIP_dir):
             new_text, text_vars = parse_prompt_vars(new_text)
             cstr(f"CLIPTextEncode Prased Prompt:\n {new_text}").msg.print()
             
-            cstr("It doesn't seem ComfyUI_ADV_CLIP_emb is up to date. Falling back to legacy method.").warning.print()
             encode = AdvancedCLIPTextEncode().encode(clip, new_text, token_normalization, weight_interpretation)     
-            return ([[res[0][0][0], {}]], new_text, text, { "ui": { "string": new_text } } )
+            return ([[encode[0][0][0], encode[0][0][1]]], new_text, text, { "ui": { "string": new_text } } )
                  
                 
     NODE_CLASS_MAPPINGS.update({"CLIPTextEncode (BlenderNeko Advanced + NSP)": WAS_AdvancedCLIPTextEncode})       
