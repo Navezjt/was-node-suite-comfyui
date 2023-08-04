@@ -142,6 +142,7 @@
  - Image fDOF Filter: Apply a fake depth of field effect to an image
  - Image to Latent Mask: Convert a image into a latent mask
  - Image to Noise: Convert a image into noise, useful for init blending or init input to theme a diffusion.
+ - Images to RGB: Convert a tensor image batch to RGB if they are RGBA or some other mode.
  - Image to Seed: Convert a image to a reproducible seed
  - Image Voronoi Noise Filter
    - A custom implementation of the worley voronoi noise diagram
@@ -221,6 +222,7 @@
  - Text Random Line: Select a random line from a text input string
  - Text Random Prompt: Feeling lucky? Get a random prompt based on a search seed, such as "superhero"
  - Text String: Write a single line text string value
+ - Text String Truncate: Truncate a string from the beginning or end by characters or words.
  - Text to Conditioning: Convert a text string to conditioning.
  - True Random.org Number Generator: Generate a truly random number online from atmospheric noise with [Random.org](https://random.org/)
    - [Get your API key from your account page](https://accounts.random.org/)

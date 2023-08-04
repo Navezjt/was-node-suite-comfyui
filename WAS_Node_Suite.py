@@ -1661,12 +1661,16 @@ class WAS_Tools_Class():
             alpha = image.getchannel('A')
             
         grayscale_image = image if image.mode == 'L' else image.convert('L')
+        
         contrast_enhancer = ImageEnhance.Contrast(grayscale_image)
         contrast_image = contrast_enhancer.enhance(contrast)
+        
         saturation_enhancer = ImageEnhance.Color(contrast_image) if image.mode != 'L' else None
         saturation_image = contrast_image if saturation_enhancer is None else saturation_enhancer.enhance(saturation)
+        
         sharpness_enhancer = ImageEnhance.Sharpness(saturation_image)
         sharpness_image = sharpness_enhancer.enhance(sharpness)
+        
         brightness_enhancer = ImageEnhance.Brightness(sharpness_image)
         brightness_image = brightness_enhancer.enhance(brightness)
         
@@ -2675,6 +2679,7 @@ class WAS_Image_Filters:
                 "blur": ("INT", {"default": 0, "min": 0, "max": 16, "step": 1}),
                 "gaussian_blur": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1024.0, "step": 0.1}),
                 "edge_enhance": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "detail_enhance": (["false", "true"],),
             },
         }
 
@@ -2683,64 +2688,76 @@ class WAS_Image_Filters:
 
     CATEGORY = "WAS Suite/Image/Filter"
 
-    def image_filters(self, image, brightness, contrast, saturation, sharpness, blur, gaussian_blur, edge_enhance):
+    def image_filters(self, image, brightness, contrast, saturation, sharpness, blur, gaussian_blur, edge_enhance, detail_enhance):
 
-        pil_image = None
 
-        # Apply NP Adjustments
-        if brightness > 0.0 or brightness < 0.0:
-            # Apply brightness
-            image = np.clip(image + brightness, 0.0, 1.0)
+        tensors = []
+        for img in image:
 
-        if contrast > 1.0 or contrast < 1.0:
-            # Apply contrast
-            image = np.clip(image * contrast, 0.0, 1.0)
+            pil_image = None
 
-        # Apply PIL Adjustments
-        if saturation > 1.0 or saturation < 1.0:
-            # PIL Image
-            pil_image = tensor2pil(image)
-            # Apply saturation
-            pil_image = ImageEnhance.Color(pil_image).enhance(saturation)
+            # Apply NP Adjustments
+            if brightness > 0.0 or brightness < 0.0:
+                # Apply brightness
+                img = np.clip(img + brightness, 0.0, 1.0)
 
-        if sharpness > 1.0 or sharpness < 1.0:
-            # Assign or create PIL Image
-            pil_image = pil_image if pil_image else tensor2pil(image)
-            # Apply sharpness
-            pil_image = ImageEnhance.Sharpness(pil_image).enhance(sharpness)
+            if contrast > 1.0 or contrast < 1.0:
+                # Apply contrast
+                img = np.clip(img * contrast, 0.0, 1.0)
 
-        if blur > 0:
-            # Assign or create PIL Image
-            pil_image = pil_image if pil_image else tensor2pil(image)
-            # Apply blur
-            for _ in range(blur):
-                pil_image = pil_image.filter(ImageFilter.BLUR)
+            # Apply PIL Adjustments
+            if saturation > 1.0 or saturation < 1.0:
+                # PIL Image
+                pil_image = tensor2pil(img)
+                # Apply saturation
+                pil_image = ImageEnhance.Color(pil_image).enhance(saturation)
 
-        if gaussian_blur > 0.0:
-            # Assign or create PIL Image
-            pil_image = pil_image if pil_image else tensor2pil(image)
-            # Apply Gaussian blur
-            pil_image = pil_image.filter(
-                ImageFilter.GaussianBlur(radius=gaussian_blur))
+            if sharpness > 1.0 or sharpness < 1.0:
+                # Assign or create PIL Image
+                pil_image = pil_image if pil_image else tensor2pil(img)
+                # Apply sharpness
+                pil_image = ImageEnhance.Sharpness(pil_image).enhance(sharpness)
 
-        if edge_enhance > 0.0:
-            # Assign or create PIL Image
-            pil_image = pil_image if pil_image else tensor2pil(image)
-            # Edge Enhancement
-            edge_enhanced_img = pil_image.filter(ImageFilter.EDGE_ENHANCE_MORE)
-            # Blend Mask
-            blend_mask = Image.new(
-                mode="L", size=pil_image.size, color=(round(edge_enhance * 255)))
-            # Composite Original and Enhanced Version
-            pil_image = Image.composite(
-                edge_enhanced_img, pil_image, blend_mask)
-            # Clean-up
-            del blend_mask, edge_enhanced_img
+            if blur > 0:
+                # Assign or create PIL Image
+                pil_image = pil_image if pil_image else tensor2pil(img)
+                # Apply blur
+                for _ in range(blur):
+                    pil_image = pil_image.filter(ImageFilter.BLUR)
 
-        # Output image
-        out_image = (pil2tensor(pil_image) if pil_image else image)
+            if gaussian_blur > 0.0:
+                # Assign or create PIL Image
+                pil_image = pil_image if pil_image else tensor2pil(img)
+                # Apply Gaussian blur
+                pil_image = pil_image.filter(
+                    ImageFilter.GaussianBlur(radius=gaussian_blur))
 
-        return (out_image, )
+            if edge_enhance > 0.0:
+                # Assign or create PIL Image
+                pil_image = pil_image if pil_image else tensor2pil(img)
+                # Edge Enhancement
+                edge_enhanced_img = pil_image.filter(ImageFilter.EDGE_ENHANCE_MORE)
+                # Blend Mask
+                blend_mask = Image.new(
+                    mode="L", size=pil_image.size, color=(round(edge_enhance * 255)))
+                # Composite Original and Enhanced Version
+                pil_image = Image.composite(
+                    edge_enhanced_img, pil_image, blend_mask)
+                # Clean-up
+                del blend_mask, edge_enhanced_img
+                
+            if detail_enhance == "true":
+                pil_image = pil_image if pil_image else tensor2pil(img)
+                pil_image = pil_image.filter(ImageFilter.DETAIL)
+
+            # Output image
+            out_image = (pil2tensor(pil_image) if pil_image else img)
+            
+            tensors.append(out_image)
+            
+        tensors = torch.cat(tensors, dim=0)
+
+        return (tensors, )
 
 
 # IMAGE STYLE FILTER
@@ -2803,74 +2820,72 @@ class WAS_Image_Style_Filter:
         # Import Pilgram module
         import pilgram
 
-        # Convert image to PIL
-        image = tensor2pil(image)
-
         # WAS Filters
         WTools = WAS_Tools_Class()
 
         # Apply blending
-        if style:
+        tensors = []
+        for img in image:
             if style == "1977":
-                out_image = pilgram._1977(image)
+                tensors.append(pil2tensor(pilgram._1977(tensor2pil(img))))
             elif style == "aden":
-                out_image = pilgram.aden(image)
+                tensors.append(pil2tensor(pilgram.aden(tensor2pil(img))))
             elif style == "brannan":
-                out_image = pilgram.brannan(image)
+                tensors.append(pil2tensor(pilgram.brannan(tensor2pil(img))))
             elif style == "brooklyn":
-                out_image = pilgram.brooklyn(image)
+                tensors.append(pil2tensor(pilgram.brooklyn(tensor2pil(img))))
             elif style == "clarendon":
-                out_image = pilgram.clarendon(image)
+                tensors.append(pil2tensor(pilgram.clarendon(tensor2pil(img))))
             elif style == "earlybird":
-                out_image = pilgram.earlybird(image)
+                tensors.append(pil2tensor(pilgram.earlybird(tensor2pil(img))))
             elif style == "fairy tale":
-                out_image = WTools.sparkle(image)
+                tensors.append(pil2tensor(WTools.sparkle(tensor2pil(img))))
             elif style == "gingham":
-                out_image = pilgram.gingham(image)
+                tensors.append(pil2tensor(pilgram.gingham(tensor2pil(img))))
             elif style == "hudson":
-                out_image = pilgram.hudson(image)
+                tensors.append(pil2tensor(pilgram.hudson(tensor2pil(img))))
             elif style == "inkwell":
-                out_image = pilgram.inkwell(image)
+                tensors.append(pil2tensor(pilgram.inkwell(tensor2pil(img))))
             elif style == "kelvin":
-                out_image = pilgram.kelvin(image)
+                tensors.append(pil2tensor(pilgram.kelvin(tensor2pil(img))))
             elif style == "lark":
-                out_image = pilgram.lark(image)
+                tensors.append(pil2tensor(pilgram.lark(tensor2pil(img))))
             elif style == "lofi":
-                out_image = pilgram.lofi(image)
+                tensors.append(pil2tensor(pilgram.lofi(tensor2pil(img))))
             elif style == "maven":
-                out_image = pilgram.maven(image)
+                tensors.append(pil2tensor(pilgram.maven(tensor2pil(img))))
             elif style == "mayfair":
-                out_image = pilgram.mayfair(image)
+                tensors.append(pil2tensor(pilgram.mayfair(tensor2pil(img))))
             elif style == "moon":
-                out_image = pilgram.moon(image)
+                tensors.append(pil2tensor(pilgram.moon(tensor2pil(img))))
             elif style == "nashville":
-                out_image = pilgram.nashville(image)
+                tensors.append(pil2tensor(pilgram.nashville(tensor2pil(img))))
             elif style == "perpetua":
-                out_image = pilgram.perpetua(image)
+                tensors.append(pil2tensor(pilgram.perpetua(tensor2pil(img))))
             elif style == "reyes":
-                out_image = pilgram.reyes(image)
+                tensors.append(pil2tensor(pilgram.reyes(tensor2pil(img))))
             elif style == "rise":
-                out_image = pilgram.rise(image)
+                tensors.append(pil2tensor(pilgram.rise(tensor2pil(img))))
             elif style == "slumber":
-                out_image = pilgram.slumber(image)
+                tensors.append(pil2tensor(pilgram.slumber(tensor2pil(img))))
             elif style == "stinson":
-                out_image = pilgram.stinson(image)
+                tensors.append(pil2tensor(pilgram.stinson(tensor2pil(img))))
             elif style == "toaster":
-                out_image = pilgram.toaster(image)
+                tensors.append(pil2tensor(pilgram.toaster(tensor2pil(img))))
             elif style == "valencia":
-                out_image = pilgram.valencia(image)
+                tensors.append(pil2tensor(pilgram.valencia(tensor2pil(img))))
             elif style == "walden":
-                out_image = pilgram.walden(image)
+                tensors.append(pil2tensor(pilgram.walden(tensor2pil(img))))
             elif style == "willow":
-                out_image = pilgram.willow(image)
+                tensors.append(pil2tensor(pilgram.willow(tensor2pil(img))))
             elif style == "xpro2":
-                out_image = pilgram.xpro2(image)
+                tensors.append(pil2tensor(pilgram.xpro2(tensor2pil(img))))
             else:
-                out_image = image
+                tensors.append(img)
 
-        out_image = out_image.convert("RGB")
+        tensors = torch.cat(tensors, dim=0)
 
-        return (torch.from_numpy(np.array(out_image).astype(np.float32) / 255.0).unsqueeze(0), )
+        return (tensors, )
 
 
 # IMAGE CROP FACE
@@ -3595,6 +3610,9 @@ class WAS_Image_Morph_GIF:
     def create_morph_gif(self, image_a, image_b, transition_frames=10, still_image_delay_ms=10, duration_ms=0.1, loops=0, max_size=512, 
                             output_path="./ComfyUI/output", filename="morph", filetype="GIF"):
                 
+        tokens = TextTokens()
+        WTools = WAS_Tools_Class()
+                
         if 'imageio' not in packages():
             cstr("Installing imageio...").msg.print()
             subprocess.check_call(
@@ -3622,10 +3640,7 @@ class WAS_Image_Morph_GIF:
             duration_ms = 0.1
         elif duration_ms > 60000.0:
             duration_ms = 60000.0
-            
-        tokens = TextTokens()
-        WTools = WAS_Tools_Class()
-            
+                        
         output_file = WTools.morph_images([tensor2pil(image_a), tensor2pil(image_b)], steps=int(transition_frames), max_size=int(max_size), loop=int(loops), 
                             still_duration=int(still_image_delay_ms), duration=int(duration_ms), output_path=output_path,
                             filename=tokens.parseTokens(filename), filetype=filetype)
@@ -4790,6 +4805,7 @@ class WAS_Load_Image_Batch:
                 "label": ("STRING", {"default": 'Batch 001', "multiline": False}),
                 "path": ("STRING", {"default": '', "multiline": False}),
                 "pattern": ("STRING", {"default": '*', "multiline": False}),
+                "allow_RGBA_output": (["false","true"],),
             },
         }
 
@@ -4799,7 +4815,9 @@ class WAS_Load_Image_Batch:
 
     CATEGORY = "WAS Suite/IO"
 
-    def load_batch_images(self, path, pattern='*', index=0, mode="single_image", label='Batch 001'):
+    def load_batch_images(self, path, pattern='*', index=0, mode="single_image", label='Batch 001', allow_RGBA_output='false'):
+    
+        allow_RGBA_output = (allow_RGBA_output == 'true')
         
         if not os.path.exists(path):
             return (None, )
@@ -4818,6 +4836,9 @@ class WAS_Load_Image_Batch:
 
         # Update history
         update_history_images(new_paths)
+        
+        if not allow_RGBA_output:
+           image = image.convert("RGB")
 
         return (pil2tensor(image), filename)
 
@@ -4848,7 +4869,9 @@ class WAS_Load_Image_Batch:
             if image_id < 0 or image_id >= len(self.image_paths):
                 cstr(f"Invalid image index `{image_id}`").error.print()
                 return
-            return (Image.open(self.image_paths[image_id]), os.path.basename(self.image_paths[image_id]))
+            i = Image.open(self.image_paths[image_id])
+            i = ImageOps.exif_transpose(i)
+            return (i, os.path.basename(self.image_paths[image_id]))
 
         def get_next_image(self):
             if self.index >= len(self.image_paths):
@@ -4859,7 +4882,9 @@ class WAS_Load_Image_Batch:
                 self.index = 0
             cstr(f'{cstr.color.YELLOW}{self.label}{cstr.color.END} Index: {self.index}').msg.print()
             self.WDB.insert('Batch Counters', self.label, self.index)
-            return (Image.open(image_path), os.path.basename(image_path))
+            i = Image.open(image_path)
+            i = ImageOps.exif_transpose(i)
+            return (i, os.path.basename(image_path))
 
         def get_current_image(self):
             if self.index >= len(self.image_paths):
@@ -6086,7 +6111,7 @@ class WAS_Dragon_Filter:
                 "sharpness": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 6.0, "step": 0.01}),
                 "highpass_radius": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 255.0, "step": 0.01}),
                 "highpass_samples": ("INT", {"default": 1, "min": 0, "max": 6.0, "step": 1}),
-                "highpass_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "highpass_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 3.0, "step": 0.01}),
                 "colorize": (["true","false"],),
             },
         }
@@ -6619,6 +6644,7 @@ class WAS_Image_Save:
                 "filename_prefix": ("STRING", {"default": "ComfyUI"}),
                 "filename_delimiter": ("STRING", {"default":"_"}),
                 "filename_number_padding": ("INT", {"default":4, "min":1, "max":9, "step":1}),
+                "filename_number_start": (["false", "true"],),
                 "extension": (['png', 'jpeg', 'gif', 'tiff', 'webp'], ),
                 "quality": ("INT", {"default": 100, "min": 1, "max": 100, "step": 1}),
                 "lossless_webp": (["false", "true"],),
@@ -6642,8 +6668,9 @@ class WAS_Image_Save:
 
     def was_save_images(self, images, output_path='', filename_prefix="ComfyUI", filename_delimiter='_', 
                         extension='png', quality=100, lossless_webp="false", prompt=None, extra_pnginfo=None, 
-                        overwrite_mode='false', filename_number_padding=4, show_history='false', 
-                        show_history_by_prefix="true", embed_workflow="true", show_previews="true"):
+                        overwrite_mode='false', filename_number_padding=4, filename_number_start='false',
+                        show_history='false', show_history_by_prefix="true", embed_workflow="true",
+                        show_previews="true"):
                         
         delimiter = filename_delimiter
         number_padding = filename_number_padding
@@ -6653,6 +6680,8 @@ class WAS_Image_Save:
         tokens = TextTokens()
 
         original_output = self.output_dir
+        # Parse prefix tokens
+        filename_prefix = tokens.parseTokens(filename_prefix)
 
         # Setup output path
         if output_path in [None, '', "none", "."]:
@@ -6672,7 +6701,10 @@ class WAS_Image_Save:
                 os.makedirs(output_path, exist_ok=True)
         
         # Find existing counter values
-        pattern = f"{re.escape(filename_prefix)}{re.escape(delimiter)}(\\d{{{filename_number_padding}}})"
+        if filename_number_start == 'true':
+            pattern = f"(\\d{{{filename_number_padding}}}){re.escape(delimiter)}{re.escape(filename_prefix)}"
+        else:
+            pattern = f"{re.escape(filename_prefix)}{re.escape(delimiter)}(\\d{{{filename_number_padding}}})"
         existing_counters = [
             int(re.search(pattern, filename).group(1))
             for filename in os.listdir(output_path)
@@ -6711,16 +6743,15 @@ class WAS_Image_Save:
                     for x in extra_pnginfo:
                         metadata.add_text(x, json.dumps(extra_pnginfo[x]))
 
-            # Parse prefix tokens
-            filename_prefix = tokens.parseTokens(filename_prefix)
-
             if overwrite_mode == 'prefix_as_filename':
                 file = f"{filename_prefix}{file_extension}"
             else:
-                file = f"{filename_prefix}{delimiter}{counter:0{number_padding}}{file_extension}"
+                if filename_number_start == 'true':
+                    file = f"{counter:0{number_padding}}{delimiter}{filename_prefix}{file_extension}"
+                else:
+                    file = f"{filename_prefix}{delimiter}{counter:0{number_padding}}{file_extension}"
                 if os.path.exists(os.path.join(output_path, file)):
                     counter += 1
-                    file = f"{filename_prefix}{delimiter}{counter:0{number_padding}}{file_extension}"
             try:
                 output_file = os.path.abspath(os.path.join(output_path, file))
                 if extension == 'png':
@@ -6822,10 +6853,12 @@ class WAS_Load_Image:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required":
-                {"image_path": (
-                    "STRING", {"default": './ComfyUI/input/example.png', "multiline": False}), }
+        return {
+                "required": {
+                    "image_path": ("STRING", {"default": './ComfyUI/input/example.png', "multiline": False}), 
+                    "RGBA": (["false","true"],),
                 }
+            }
 
     RETURN_TYPES = ("IMAGE", "MASK", TEXT_TYPE)
     RETURN_NAMES = ("image", "mask", "filename_text")
@@ -6833,7 +6866,9 @@ class WAS_Load_Image:
     
     CATEGORY = "WAS Suite/IO"
 
-    def load_image(self, image_path):
+    def load_image(self, image_path, RGBA='false'):
+    
+        RGBA = (RGBA == 'true')
 
         if image_path.startswith('http'):
             from io import BytesIO
@@ -6850,7 +6885,8 @@ class WAS_Load_Image:
         # Update history
         update_history_images(image_path)
 
-        image = i.convert('RGB')
+        if not RGBA:
+            image = i.convert('RGB')
         image = np.array(image).astype(np.float32) / 255.0
         image = torch.from_numpy(image)[None,]
 
@@ -6885,8 +6921,38 @@ class WAS_Load_Image:
         with open(image_path, 'rb') as f:
             m.update(f.read())
         return m.digest().hex()
+        
+        
+# IMAGES TO RGB
 
+class WAS_Images_To_RGB:
+    def __init__(self):
+        pass
 
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
+    FUNCTION = "images_to_rgb"
+
+    CATEGORY = "WAS Suite/Image"
+
+    def images_to_rgb(self, images):
+
+        tensors = []
+        for image in images:
+            tensors.append(pil2tensor(tensor2pil(image).convert("RGB")))
+        tensors = torch.cat(tensors, dim=0)
+
+        return (tensors,)
+        
+        
 # MASK BATCH TO MASK
 
 class WAS_Mask_Batch_to_Single_Mask:
@@ -8349,6 +8415,7 @@ class WAS_KSampler:
     def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=1.0):
         return nodes.common_ksampler(model, seed['seed'], steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=denoise)
 
+# KSampler Cycle
 
 class WAS_KSampler_Cycle:
     @classmethod
@@ -8395,7 +8462,7 @@ class WAS_KSampler_Cycle:
                     "steps_control": (["decrement", "increment"],),
                     "steps_scaling_value": ("INT", {"default": 10, "min": 1, "max": 20, "step": 1}),
                     "steps_cutoff": ("INT", {"default": 20, "min": 4, "max": 1000, "step": 1}),
-                    "denoise_cutoff": ("INT", {"default": 0.25, "min": 0.01, "max": 1.0, "step": 0.01}),
+                    "denoise_cutoff": ("FLOAT", {"default": 0.25, "min": 0.01, "max": 1.0, "step": 0.01}),
                 }
             }
 
@@ -8659,9 +8726,9 @@ class WAS_KSampler_Cycle:
         sharpened_pil = Image.fromarray(sharpened)
 
         return sharpened_pil
+        
     
 # Latent Blend
-
 
 class WAS_Blend_Latents:
     @classmethod
@@ -8856,6 +8923,64 @@ class WAS_Prompt_Styles_Selector:
             
         return (prompt, negative_prompt)
 
+class WAS_Prompt_Multiple_Styles_Selector:
+    def __init__(self):
+        pass
+        
+    @classmethod
+    def INPUT_TYPES(cls):
+        style_list = []
+        if os.path.exists(STYLES_PATH):
+            with open(STYLES_PATH, "r") as f:
+                if len(f.readlines()) != 0:
+                    f.seek(0)
+                    data = f.read()
+                    styles = json.loads(data)
+                    for style in styles.keys():
+                        style_list.append(style)
+        if not style_list:
+            style_list.append("None")
+        return {
+            "required": {
+                "style1": (style_list,),
+                "style2": (style_list,),
+                "style3": (style_list,),
+                "style4": (style_list,),                
+            }
+        }
+        
+    RETURN_TYPES = (TEXT_TYPE,TEXT_TYPE)
+    RETURN_NAMES = ("positive_string", "negative_string")
+    FUNCTION = "load_style"
+    
+    CATEGORY = "WAS Suite/Text"
+    
+    def load_style(self, style1, style2, style3, style4):
+        styles = {}
+        if os.path.exists(STYLES_PATH):
+            with open(STYLES_PATH, 'r') as data:
+                styles = json.load(data)
+        else:
+            cstr(f"The styles file does not exist at `{STYLES_PATH}`. Unable to load styles! Have you imported your AUTOMATIC1111 WebUI styles?").error.print()
+            return ('', '')
+
+        # Check if the selected styles exist in the loaded styles dictionary
+        selected_styles = [style1, style2, style3, style4]
+        for style in selected_styles:
+            if style not in styles:
+                print(f"Style '{style}' was not found in the styles file.")
+                return ('', '')
+
+        prompt = ""
+        negative_prompt = ""
+        
+        # Concatenate the prompts and negative prompts of the selected styles
+        for style in selected_styles:
+            prompt += styles[style]['prompt'] + " "
+            negative_prompt += styles[style]['negative_prompt'] + " "
+
+        return (prompt.strip(), negative_prompt.strip())
+
 # Text Multiline Node
 
 class WAS_Text_Multiline:
@@ -8986,13 +9111,14 @@ class WAS_Text_Parse_Embeddings_By_Name:
         return (self.convert_a1111_embeddings(text), )
         
     def convert_a1111_embeddings(self, text):
-        import re
-        for filename in os.listdir(os.path.join(MODELS_DIR, 'embeddings')):
-            basename, ext = os.path.splitext(filename)
-            pattern = re.compile(r'\b{}\b'.format(re.escape(basename)))
-            replacement = 'embedding:{}'.format(basename)
-            text = re.sub(pattern, replacement, text)
-        return text        
+        for embeddings_path in comfy_paths.folder_names_and_paths["embeddings"][0]:
+            for filename in os.listdir(embeddings_path):
+                basename, ext = os.path.splitext(filename)
+                pattern = re.compile(r'\b{}\b'.format(re.escape(basename)))
+                replacement = 'embedding:{}'.format(basename)
+                text = re.sub(pattern, replacement, text)
+
+        return text  
                 
 
 # Text Dictionary Concatenate
@@ -9052,6 +9178,59 @@ class WAS_Text_String:
 
     def text_string(self, text='', text_b='', text_c='', text_d=''):
         return (text, text_b, text_c, text_d)
+
+
+# Text String Truncation
+
+class WAS_Text_String_Truncate:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"forceInput": True}),
+                "truncate_by": (["characters", "words"],),
+                "truncate_from": (["end", "beginning"],),
+                "truncate_to": ("INT", {"default": 10, "min": 1, "max": 99999999, "step": 1}),
+            },
+            "optional": {
+                "text_b": ("STRING", {"forceInput": True}),
+                "text_c": ("STRING", {"forceInput": True}),
+                "text_d": ("STRING", {"forceInput": True}),
+            }
+        }
+    RETURN_TYPES = (TEXT_TYPE,TEXT_TYPE,TEXT_TYPE,TEXT_TYPE)
+    FUNCTION = "truncate_string"
+
+    CATEGORY = "WAS Suite/Text/Operations"
+
+    def truncate_string(self, text, truncate_by, truncate_from, truncate_to, text_b='', text_c='', text_d=''):
+        return (
+            self.truncate(text, truncate_to, truncate_from, truncate_by), 
+            self.truncate(text_b, truncate_to, truncate_from, truncate_by), 
+            self.truncate(text_c, truncate_to, truncate_from, truncate_by), 
+            self.truncate(text_d, truncate_to, truncate_from, truncate_by), 
+        )
+        
+    def truncate(self, string, max_length, mode='end', truncate_by='characters'):
+        if mode not in ['beginning', 'end']:
+            cstr("Invalid mode. 'mode' must be either 'beginning' or 'end'.").error.print()
+            mode = "end"
+        if truncate_by not in ['characters', 'words']:
+            cstr("Invalid truncate_by. 'truncate_by' must be either 'characters' or 'words'.").error.print()
+        if truncate_by == 'characters':
+            if mode == 'beginning':
+                return string[:max_length]
+            else:
+                return string[-max_length:]
+        words = string.split()
+        if mode == 'beginning':
+            return ' '.join(words[:max_length])
+        else:
+            return ' '.join(words[-max_length:])
+
 
 
 # Text Compare Strings
@@ -9171,7 +9350,10 @@ class WAS_Text_Compare:
                                 similar_words.add(word1)
                             if word2 not in similar_words:
                                 similar_words.add(word2)
-            similarity_score = 1 - (dp[m][n]/max(m,n))
+            if(max(m,n) == 0):
+                similarity_score = 1
+            else:
+                similarity_score = 1 - (dp[m][n]/max(m,n))
             return (similarity_score, list(similar_words))
 
 
@@ -9905,7 +10087,7 @@ class WAS_Text_Load_Line_From_File:
             self.index += 1
             if self.index == len(self.lines):
                 self.index = 0
-            cstr(f'{cstr.color.YELLOW}TextBatch{cstr.msg.END} Index: {self.index}')
+            cstr(f'{cstr.color.YELLOW}TextBatch{cstr.color.END} Index: {self.index}').msg.print()
             return line, self.lines
 
         def get_line_by_index(self, index):
@@ -9914,7 +10096,7 @@ class WAS_Text_Load_Line_From_File:
                 return None, []
             self.index = index
             line = self.lines[self.index]
-            cstr(f'{cstr.color.YELLOW}TextBatch{cstr.msg.END} Index: {self.index}')
+            cstr(f'{cstr.color.YELLOW}TextBatch{cstr.color.END} Index: {self.index}').msg.print()
             return line, self.lines
 
         def store_index(self):
@@ -11082,11 +11264,16 @@ class WAS_Number_Counter:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "counter_id": ("STRING", {"default": "counter_001", "multiline": False}),
                 "number_type": (["integer", "float"],),
                 "mode": (["increment", "decrement"],),
                 "start": ("FLOAT", {"default": 0, "min": -18446744073709551615, "max": 18446744073709551615, "step": 0.01}),
                 "step": ("FLOAT", {"default": 1, "min": 0, "max": 99999, "step": 0.01}), 
+            },
+            "optional": {
+                "reset_bool": ("NUMBER",),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
             }
         }
             
@@ -11100,18 +11287,23 @@ class WAS_Number_Counter:
 
     CATEGORY = "WAS Suite/Number"
 
-    def increment_number(self, counter_id, number_type, mode, start, step):
+    def increment_number(self, number_type, mode, start, step, unique_id, reset_bool=0):
+    
+        print(unique_id)
 
         counter = int(start) if mode == 'integer' else start
-        if self.counters.__contains__(counter_id):
-            counter = self.counters[counter_id]
+        if self.counters.__contains__(unique_id):
+            counter = self.counters[unique_id]
+            
+        if round(reset_bool) >= 1:
+            counter = start
             
         if mode == 'increment':
             counter += step
         else:
             counter -= step
             
-        self.counters[counter_id] = counter
+        self.counters[unique_id] = counter
         
         result = int(counter) if number_type == 'integer' else float(counter)
         
@@ -11323,7 +11515,7 @@ class WAS_Boolean:
     CATEGORY = "WAS Suite/Logic"
 
     def return_boolean(self, boolean_number=1):
-        return (int(boolean_number), int(boolean_number))
+        return (int(round(boolean_number)), int(round(boolean_number)))
 
 # NUMBER OPERATIONS
 
@@ -11504,7 +11696,7 @@ class WAS_Latent_Input_Switch:
 
     def latent_input_switch(self, latent_a, latent_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (latent_a, )
         else:
             return (latent_b, )
@@ -11679,7 +11871,7 @@ class WAS_Number_Input_Switch:
 
     def number_input_switch(self, number_a, number_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (number_a, float(number_a), int(number_a))
         else:
             return (number_b, float(number_b), int(number_b))
@@ -11708,7 +11900,7 @@ class WAS_Image_Input_Switch:
 
     def image_input_switch(self, image_a, image_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (image_a, )
         else:
             return (image_b, )
@@ -11736,7 +11928,7 @@ class WAS_Conditioning_Input_Switch:
 
     def conditioning_input_switch(self, conditioning_a, conditioning_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (conditioning_a, )
         else:
             return (conditioning_b, )    
@@ -11764,7 +11956,7 @@ class WAS_Model_Input_Switch:
 
     def model_switch(self, model_a, model_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (model_a, )
         else:
             return (model_b, )    
@@ -11792,7 +11984,7 @@ class WAS_VAE_Input_Switch:
 
     def vae_switch(self, vae_a, vae_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (vae_a, )
         else:
             return (vae_b, )
@@ -11820,7 +12012,7 @@ class WAS_CLIP_Input_Switch:
 
     def clip_switch(self, clip_a, clip_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (clip_a, )
         else:
             return (clip_b, )  
@@ -11848,7 +12040,7 @@ class WAS_Upscale_Model_Input_Switch:
 
     def upscale_model_switch(self, upscale_model_a, upscale_model_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (upscale_model_a, )
         else:
             return (upscale_model_b, )     
@@ -11877,7 +12069,7 @@ class WAS_Control_Net_Input_Switch:
 
     def control_net_switch(self, control_net_a, control_net_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (control_net_a, )
         else:
             return (control_net_b, ) 
@@ -11905,7 +12097,7 @@ class WAS_CLIP_Vision_Input_Switch:
 
     def clip_vision_switch(self, clip_vision_a, clip_vision_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (clip_vision_a, )
         else:
             return (clip_vision_b)   
@@ -11933,7 +12125,7 @@ class WAS_Text_Input_Switch:
 
     def text_input_switch(self, text_a, text_b, boolean_number=1):
 
-        if int(boolean_number) == 1:
+        if int(round(boolean_number)) == 1:
             return (text_a, )
         else:
             return (text_b, )
@@ -12126,7 +12318,9 @@ class WAS_Lora_Loader:
             if self.loaded_lora[0] == lora_path:
                 lora = self.loaded_lora[1]
             else:
-                del self.loaded_lora
+                temp = self.loaded_lora
+                self.loaded_lora = None
+                del temp
 
         if lora is None:
             lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
@@ -12674,6 +12868,7 @@ NODE_CLASS_MAPPINGS = {
     "Image fDOF Filter": WAS_Image_fDOF,
     "Image to Latent Mask": WAS_Image_To_Mask,
     "Image to Noise": WAS_Image_To_Noise,
+    "Images to RGB": WAS_Images_To_RGB,
     "Image to Seed": WAS_Image_To_Seed,
     "Integer place counter": WAS_Integer_Place_Counter,
     "Image Voronoi Noise Filter": WAS_Image_Voronoi_Noise_Filter,
@@ -12723,6 +12918,7 @@ NODE_CLASS_MAPPINGS = {
     "Number to String": WAS_Number_To_String,
     "Number to Text": WAS_Number_To_Text,
     "Prompt Styles Selector": WAS_Prompt_Styles_Selector,
+    "Prompt Multiple Styles Selector": WAS_Prompt_Multiple_Styles_Selector,
     "Random Number": WAS_Random_Number,
     "Save Text File": WAS_Text_Save,
     "Seed": WAS_Seed,
@@ -12766,6 +12962,7 @@ NODE_CLASS_MAPPINGS = {
     "Text to Console": WAS_Text_to_Console,
     "Text to Number": WAS_Text_To_Number,
     "Text to String": WAS_Text_To_String,
+    "Text String Truncate": WAS_Text_String_Truncate,
     "True Random.org Number Generator": WAS_True_Random_Number,
     "unCLIP Checkpoint Loader": WAS_unCLIP_Checkpoint_Loader,
     "Upscale Model Loader": WAS_Upscale_Model_Loader,
