@@ -2692,9 +2692,76 @@ class WAS_Image_Filters:
 
 
         tensors = []
-        for img in image:
+        if len(image) > 1:
+            for img in image:
 
+                pil_image = None
+
+                # Apply NP Adjustments
+                if brightness > 0.0 or brightness < 0.0:
+                    # Apply brightness
+                    img = np.clip(img + brightness, 0.0, 1.0)
+
+                if contrast > 1.0 or contrast < 1.0:
+                    # Apply contrast
+                    img = np.clip(img * contrast, 0.0, 1.0)
+
+                # Apply PIL Adjustments
+                if saturation > 1.0 or saturation < 1.0:
+                    # PIL Image
+                    pil_image = tensor2pil(img)
+                    # Apply saturation
+                    pil_image = ImageEnhance.Color(pil_image).enhance(saturation)
+
+                if sharpness > 1.0 or sharpness < 1.0:
+                    # Assign or create PIL Image
+                    pil_image = pil_image if pil_image else tensor2pil(img)
+                    # Apply sharpness
+                    pil_image = ImageEnhance.Sharpness(pil_image).enhance(sharpness)
+
+                if blur > 0:
+                    # Assign or create PIL Image
+                    pil_image = pil_image if pil_image else tensor2pil(img)
+                    # Apply blur
+                    for _ in range(blur):
+                        pil_image = pil_image.filter(ImageFilter.BLUR)
+
+                if gaussian_blur > 0.0:
+                    # Assign or create PIL Image
+                    pil_image = pil_image if pil_image else tensor2pil(img)
+                    # Apply Gaussian blur
+                    pil_image = pil_image.filter(
+                        ImageFilter.GaussianBlur(radius=gaussian_blur))
+
+                if edge_enhance > 0.0:
+                    # Assign or create PIL Image
+                    pil_image = pil_image if pil_image else tensor2pil(img)
+                    # Edge Enhancement
+                    edge_enhanced_img = pil_image.filter(ImageFilter.EDGE_ENHANCE_MORE)
+                    # Blend Mask
+                    blend_mask = Image.new(
+                        mode="L", size=pil_image.size, color=(round(edge_enhance * 255)))
+                    # Composite Original and Enhanced Version
+                    pil_image = Image.composite(
+                        edge_enhanced_img, pil_image, blend_mask)
+                    # Clean-up
+                    del blend_mask, edge_enhanced_img
+                    
+                if detail_enhance == "true":
+                    pil_image = pil_image if pil_image else tensor2pil(img)
+                    pil_image = pil_image.filter(ImageFilter.DETAIL)
+
+                # Output image
+                out_image = (pil2tensor(pil_image) if pil_image else img)
+                
+                tensors.append(out_image)
+                
+            tensors = torch.cat(tensors, dim=0)
+            
+        else:
+            
             pil_image = None
+            img = image
 
             # Apply NP Adjustments
             if brightness > 0.0 or brightness < 0.0:
@@ -2745,20 +2812,76 @@ class WAS_Image_Filters:
                     edge_enhanced_img, pil_image, blend_mask)
                 # Clean-up
                 del blend_mask, edge_enhanced_img
-                
+                    
             if detail_enhance == "true":
                 pil_image = pil_image if pil_image else tensor2pil(img)
                 pil_image = pil_image.filter(ImageFilter.DETAIL)
 
             # Output image
             out_image = (pil2tensor(pil_image) if pil_image else img)
-            
-            tensors.append(out_image)
-            
-        tensors = torch.cat(tensors, dim=0)
+        
+            tensors = out_image
 
         return (tensors, )
 
+# RICHARDSON LUCY SHARPEN
+
+class WAS_Lucy_Sharpen:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "iterations": ("INT", {"default": 2, "min": 1, "max": 12, "step": 1}),
+                "kernel_size": ("INT", {"default": 3, "min": 1, "max": 16, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "sharpen"
+    
+    CATEGORY = "WAS Suite/Image/Filter"
+    
+    def sharpen(self, images, iterations, kernel_size):
+    
+        tensors = []
+        if len(images) > 1:
+            for img in images:
+                tensors.append(pil2tensor(self.lucy_sharpen(tensor2pil(img), iterations, kernel_size)))
+            tensors = torch.cat(tensors, dim=0)
+        else:
+            return (pil2tensor(self.lucy_sharpen(tensor2pil(images), iterations, kernel_size)),)
+            
+        return (tensors,)
+        
+        
+    def lucy_sharpen(self, image, iterations=10, kernel_size=3):
+        
+        from scipy.signal import convolve2d
+
+        image_array = np.array(image, dtype=np.float32) / 255.0
+        kernel = np.ones((kernel_size, kernel_size), dtype=np.float32) / (kernel_size ** 2)
+        sharpened_channels = []
+
+        padded_image_array = np.pad(image_array, ((kernel_size, kernel_size), (kernel_size, kernel_size), (0, 0)), mode='edge')
+
+        for channel in range(3):
+            channel_array = padded_image_array[:, :, channel]
+
+            for _ in range(iterations):
+                blurred_channel = convolve2d(channel_array, kernel, mode='same')
+                ratio = channel_array / (blurred_channel + 1e-6)
+                channel_array *= convolve2d(ratio, kernel, mode='same')
+
+            sharpened_channels.append(channel_array)
+
+        cropped_sharpened_image_array = np.stack(sharpened_channels, axis=-1)[kernel_size:-kernel_size, kernel_size:-kernel_size, :]
+        sharpened_image_array = np.clip(cropped_sharpened_image_array * 255.0, 0, 255).astype(np.uint8)
+        sharpened_image = Image.fromarray(sharpened_image_array)
+        return sharpened_image
 
 # IMAGE STYLE FILTER
 
@@ -4475,7 +4598,7 @@ class WAS_Mask_Batch:
     RETURN_TYPES = ("MASK",)
     RETURN_NAMES = ("masks",)
     FUNCTION = "mask_batch"
-    CATEGORY = "WAS Suite/Mask"
+    CATEGORY = "WAS Suite/Image/Masking"
 
     def _check_mask_dimensions(self, tensors, names):
         dimensions = [tensor.shape[1:] for tensor in tensors]  # Exclude the batch dimension (if present)
@@ -6634,7 +6757,7 @@ class WAS_Export_API:
 class WAS_Image_Save:
     def __init__(self):
         self.output_dir = comfy_paths.output_directory
-        self.type = os.path.basename(self.output_dir)
+        self.type = 'output'
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -6696,6 +6819,8 @@ class WAS_Image_Save:
 
         # Check output destination
         if output_path.strip() != '':
+            if not os.path.isabs(output_path):
+                output_path = os.path.join(comfy_paths.output_directory, output_path)
             if not os.path.exists(output_path.strip()):
                 cstr(f'The path `{output_path.strip()}` specified doesn\'t exist! Creating directory.').warning.print()
                 os.makedirs(output_path, exist_ok=True)
@@ -12824,6 +12949,7 @@ NODE_CLASS_MAPPINGS = {
     "Image Crop Location": WAS_Image_Crop_Location,
     "Image Crop Square Location": WAS_Image_Crop_Square_Location,
     "Image Displacement Warp": WAS_Image_Displacement_Warp,
+    "Image Lucy Sharpen": WAS_Lucy_Sharpen,
     "Image Paste Face": WAS_Image_Paste_Face_Crop,
     "Image Paste Crop": WAS_Image_Paste_Crop,
     "Image Paste Crop by Location": WAS_Image_Paste_Crop_Location,
