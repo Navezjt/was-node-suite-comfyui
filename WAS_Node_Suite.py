@@ -2072,15 +2072,18 @@ class WAS_Tools_Class():
         
     class worley_noise:
 
-        def __init__(self, height=512, width=512, density=50, option=0, use_broadcast_ops=True):
+        def __init__(self, height=512, width=512, density=50, option=0, use_broadcast_ops=True, flat=False, seed=None):
 
             self.height = height
             self.width = width
             self.density = density
             self.use_broadcast_ops = use_broadcast_ops
-            self.image = self.generateImage(option)
+            self.seed = seed
+            self.image = self.generateImage(option, flat_mode=flat)
 
         def generate_points(self):
+            if self.seed is not None:
+                np.random.seed(self.seed)  # Use the provided seed
             self.points = np.random.randint(0, (self.width, self.height), (self.density, 2))
 
         def calculate_noise(self, option):
@@ -2099,17 +2102,28 @@ class WAS_Tools_Class():
             distances = np.sort(d, axis=0)
             self.data = distances[option]
 
-        def generateImage(self, option):
+        def generateImage(self, option, flat_mode=False):
             self.generate_points()
             if self.use_broadcast_ops:
                 self.broadcast_calculate_noise(option)
             else:
                 self.calculate_noise(option)
-            min_val, max_val = np.min(self.data), np.max(self.data)
-            data_scaled = (self.data - min_val) / (max_val - min_val) * 255
-            data_scaled = data_scaled.astype(np.uint8)
             
-            return Image.fromarray(data_scaled).convert('RGB')
+            non_flat_black_adjusted = np.zeros((self.height, self.width), dtype=np.float32)
+            for h in range(self.height):
+                for w in range(self.width):
+                    closest_point_idx = np.argmin(np.sum((self.points - np.array([w, h])) ** 2, axis=1))
+                    non_flat_black_adjusted[h, w] = self.data[h, w] + self.data[closest_point_idx]
+            
+            if flat_mode:
+                flat_color_data = np.ones((self.height, self.width, 3), dtype=np.uint8) * 255  # Initialize as white
+                flat_color_data[..., :2] -= non_flat_black_adjusted[..., np.newaxis] * 255  # Scale adjustment
+                return Image.fromarray(flat_color_data, 'RGB')
+            else:
+                min_val, max_val = np.min(self.data), np.max(self.data)
+                data_scaled = (self.data - min_val) / (max_val - min_val) * 255
+                data_scaled = data_scaled.astype(np.uint8)
+                return Image.fromarray(data_scaled, 'L')
             
     # Make Image Seamless
             
@@ -4189,6 +4203,7 @@ class WAS_Image_Voronoi_Noise_Filter:
                 "height": ("INT", {"default": 512, "max": 4096, "min": 64, "step": 1}),
                 "density": ("INT", {"default": 50, "max": 256, "min": 10, "step": 2}),
                 "modulator": ("INT", {"default": 0, "max": 8, "min": 0, "step": 1}),
+                "flat": (["False", "True"],),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),                
             },
         }
@@ -4199,11 +4214,11 @@ class WAS_Image_Voronoi_Noise_Filter:
 
     CATEGORY = "WAS Suite/Image/Generate/Noise"
 
-    def voronoi_noise_filter(self, width, height, density, modulator, seed):
+    def voronoi_noise_filter(self, width, height, density, modulator, flat, seed):
     
         WTools = WAS_Tools_Class()
         
-        image = WTools.worley_noise(height=width, width=height, density=density, option=modulator, use_broadcast_ops=True).image
+        image = WTools.worley_noise(height=width, width=height, density=density, option=modulator, use_broadcast_ops=True, flat=(flat == "True")).image
 
         return (pil2tensor(image), )         
 
@@ -4561,9 +4576,10 @@ class WAS_Image_Batch:
     def _check_image_dimensions(self, tensors, names):
         dimensions = [tensor.shape for tensor in tensors]
         if len(set(dimensions)) > 1:
-            mismatched_indices = [i for i, dim in enumerate(dimensions) if dim != dimensions[0]]
+            mismatched_indices = [i for i, dim in enumerate(dimensions) if dim[1:] != dimensions[0][1:]]
             mismatched_images = [names[i] for i in mismatched_indices]
-            raise ValueError(f"WAS Image Batch Warning: Input image dimensions do not match for images: {mismatched_images}")
+            if mismatched_images:
+                raise ValueError(f"WAS Image Batch Warning: Input image dimensions do not match for images: {mismatched_images}")
 
     def image_batch(self, **kwargs):
         batched_tensors = [kwargs[key] for key in kwargs if kwargs[key] is not None]
@@ -10802,7 +10818,7 @@ class WAS_SAM_Model_Loader:
     def INPUT_TYPES(self):
         return {
             "required": {
-                "model_size": (["ViT-H (91M)", "ViT-L (308M)", "ViT-B (636M)"], ),
+                "model_size": (["ViT-H", "ViT-L", "ViT-B"], ),
             }
         }
     
@@ -10815,15 +10831,15 @@ class WAS_SAM_Model_Loader:
         conf = getSuiteConfig()
         
         model_filename_mapping = {
-            "ViT-H (91M)": "sam_vit_h_4b8939.pth",
-            "ViT-L (308M)": "sam_vit_l_0b3195.pth",
-            "ViT-B (636M)": "sam_vit_b_01ec64.pth",
+            "ViT-H": "sam_vit_h_4b8939.pth",
+            "ViT-L": "sam_vit_l_0b3195.pth",
+            "ViT-B": "sam_vit_b_01ec64.pth",
         }
         
         model_url_mapping = {
-            "ViT-H (91M)": conf['sam_model_vith_url'] if conf.__contains__('sam_model_vith_url') else r"https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-            "ViT-L (308M)": conf['sam_model_vitl_url'] if conf.__contains__('sam_model_vitl_url') else r"https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-            "ViT-B (636M)": conf['sam_model_vitb_url'] if conf.__contains__('sam_model_vitb_url') else r"https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+            "ViT-H": conf['sam_model_vith_url'] if conf.__contains__('sam_model_vith_url') else r"https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+            "ViT-L": conf['sam_model_vitl_url'] if conf.__contains__('sam_model_vitl_url') else r"https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+            "ViT-B": conf['sam_model_vitb_url'] if conf.__contains__('sam_model_vitb_url') else r"https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
         }
         
         model_url = model_url_mapping[model_size]
@@ -10850,8 +10866,16 @@ class WAS_SAM_Model_Loader:
             r = requests.get(model_url, allow_redirects=True)
             open(sam_file, 'wb').write(r.content)
         
-        from segment_anything import build_sam
-        sam_model = build_sam(checkpoint=sam_file)
+        from segment_anything import build_sam_vit_h, build_sam_vit_l, build_sam_vit_b
+        
+        if model_size == 'ViT-H':
+            sam_model = build_sam_vit_h(sam_file)
+        elif model_size == 'ViT-L':
+            sam_model = build_sam_vit_l(sam_file)
+        elif model_size == 'ViT-B':
+            sam_model = build_sam_vit_b(sam_file)
+        else:
+            raise ValueError(f"SAM model does not match the model_size: '{model_size}'.")
         
         return (sam_model, )
 
@@ -11065,7 +11089,12 @@ class WAS_Bounded_Image_Blend:
     def bounded_image_blend(self, target, target_bounds, source, blend_factor, feathering):
         # Convert PyTorch tensors to PIL images
         target_pil = Image.fromarray((target.squeeze(0).cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
-        source_pil = Image.fromarray((source.squeeze(0).cpu().numpy() * 255).astype(np.uint8))
+        source_pils = []
+        if source.shape[0] > 1:
+            for source_img in source:
+                source_pils.append(Image.fromarray((source_img.squeeze(0).cpu().numpy() * 255).astype(np.uint8)))
+        else:
+            source_pils.append(Image.fromarray((source.squeeze(0).cpu().numpy() * 255).astype(np.uint8)))
 
         # Extract the target bounds
         rmin, rmax, cmin, cmax = target_bounds
@@ -11074,38 +11103,41 @@ class WAS_Bounded_Image_Blend:
         width = cmax - cmin + 1
         height = rmax - rmin + 1
 
-        # Resize the source image to match the dimensions of the target bounds
-        source_resized = source_pil.resize((width, height), Image.ANTIALIAS)
+        result_tensors = []
+        for source_pil in source_pils:
+            # Resize the source image to match the dimensions of the target bounds
+            source_resized = source_pil.resize((width, height), Image.ANTIALIAS)
 
-        # Create the blend mask with the same size as the target image
-        blend_mask = Image.new('L', target_pil.size, 0)
+            # Create the blend mask with the same size as the target image
+            blend_mask = Image.new('L', target_pil.size, 0)
 
-        # Create the feathered mask portion the size of the target bounds
-        if feathering > 0:
-            inner_mask = Image.new('L', (width - (2 * feathering), height - (2 * feathering)), 255)
-            inner_mask = ImageOps.expand(inner_mask, border=feathering, fill=0)
-            inner_mask = inner_mask.filter(ImageFilter.GaussianBlur(radius=feathering))
-        else:
-            inner_mask = Image.new('L', (width, height), 255)
+            # Create the feathered mask portion the size of the target bounds
+            if feathering > 0:
+                inner_mask = Image.new('L', (width - (2 * feathering), height - (2 * feathering)), 255)
+                inner_mask = ImageOps.expand(inner_mask, border=feathering, fill=0)
+                inner_mask = inner_mask.filter(ImageFilter.GaussianBlur(radius=feathering))
+            else:
+                inner_mask = Image.new('L', (width, height), 255)
 
-        # Paste the feathered mask portion into the blend mask at the target bounds position
-        blend_mask.paste(inner_mask, (cmin, rmin))
+            # Paste the feathered mask portion into the blend mask at the target bounds position
+            blend_mask.paste(inner_mask, (cmin, rmin))
 
-        # Create a blank image with the same size and mode as the target
-        source_positioned = Image.new(target_pil.mode, target_pil.size)
+            # Create a blank image with the same size and mode as the target
+            source_positioned = Image.new(target_pil.mode, target_pil.size)
 
-        # Paste the source image onto the blank image using the target bounds
-        source_positioned.paste(source_resized, (cmin, rmin))
+            # Paste the source image onto the blank image using the target bounds
+            source_positioned.paste(source_resized, (cmin, rmin))
 
-        # Create a blend mask using the blend_mask and blend factor
-        blend_mask = blend_mask.point(lambda p: p * blend_factor).convert('L')
+            # Create a blend mask using the blend_mask and blend factor
+            blend_mask = blend_mask.point(lambda p: p * blend_factor).convert('L')
 
-        # Blend the source and target images using the blend mask
-        result = Image.composite(source_positioned, target_pil, blend_mask)
+            # Blend the source and target images using the blend mask
+            result = Image.composite(source_positioned, target_pil, blend_mask)
 
-        # Convert the result back to a PyTorch tensor
-        result = torch.from_numpy(np.array(result).astype(np.float32) / 255).unsqueeze(0)
-        
+            # Convert the result back to a PyTorch tensor
+            result_tensors.append(torch.from_numpy(np.array(result).astype(np.float32) / 255).unsqueeze(0))
+
+        result = torch.cat(result_tensors, dim=0)
         return (result,)
 
 
@@ -11167,30 +11199,38 @@ class WAS_Bounded_Image_Blend_With_Mask:
         # Convert PyTorch tensors to PIL images
         target_pil = Image.fromarray((target.squeeze(0).cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
         target_mask_pil = Image.fromarray((target_mask.cpu().numpy() * 255).astype(np.uint8), mode='L')
-        source_pil = Image.fromarray((source.squeeze(0).cpu().numpy() * 255).astype(np.uint8))
+        source_pils = []
+        if source.ndim > 3:
+            for source_img in source:
+                source_pils.append(Image.fromarray((source_img.squeeze(0).cpu().numpy() * 255).astype(np.uint8)))
+        else:
+            source_pils.append(Image.fromarray((source.squeeze(0).cpu().numpy() * 255).astype(np.uint8)))
 
         # Extract the target bounds
         rmin, rmax, cmin, cmax = target_bounds
 
-        # Create a blank image with the same size and mode as the target
-        source_positioned = Image.new(target_pil.mode, target_pil.size)
+        result_tensors = []
+        for source_pil in source_pils:
+            # Create a blank image with the same size and mode as the target
+            source_positioned = Image.new(target_pil.mode, target_pil.size)
 
-        # Paste the source image onto the blank image using the target bounds
-        source_positioned.paste(source_pil, (cmin, rmin))
+            # Paste the source image onto the blank image using the target bounds
+            source_positioned.paste(source_pil, (cmin, rmin))
 
-        # Create a blend mask using the target mask and blend factor
-        blend_mask = target_mask_pil.point(lambda p: p * blend_factor).convert('L')
+            # Create a blend mask using the target mask and blend factor
+            blend_mask = target_mask_pil.point(lambda p: p * blend_factor).convert('L')
 
-        # Apply feathering (Gaussian blur) to the blend mask if feather_amount is greater than 0
-        if feathering > 0:
-            blend_mask = blend_mask.filter(ImageFilter.GaussianBlur(radius=feathering))
+            # Apply feathering (Gaussian blur) to the blend mask if feather_amount is greater than 0
+            if feathering > 0:
+                blend_mask = blend_mask.filter(ImageFilter.GaussianBlur(radius=feathering))
 
-        # Blend the source and target images using the blend mask
-        result = Image.composite(source_positioned, target_pil, blend_mask)
+            # Blend the source and target images using the blend mask
+            result = Image.composite(source_positioned, target_pil, blend_mask)
 
-        # Convert the result back to a PyTorch tensor
-        result_tensor = torch.from_numpy(np.array(result).astype(np.float32) / 255).unsqueeze(0)
+            # Convert the result back to a PyTorch tensor
+            result_tensors.append(torch.from_numpy(np.array(result).astype(np.float32) / 255).unsqueeze(0))
 
+        result_tensor = torch.cat(result_tensors, dim=0)
         return (result_tensor,)
 
 
@@ -11281,8 +11321,10 @@ class WAS_Random_Number:
         return (number, float(number), int(number))
         
     @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        return float("NaN")
+    def IS_CHANGED(cls, seed, **kwargs):
+        m = hashlib.sha256()
+        m.update(seed)
+        return m.digest().hex()
 
 # TRUE RANDOM NUMBER
 
@@ -11297,6 +11339,7 @@ class WAS_True_Random_Number:
                 "api_key": ("STRING",{"default":"00000000-0000-0000-0000-000000000000", "multiline": False}),
                 "minimum": ("FLOAT", {"default": 0, "min": -18446744073709551615, "max": 18446744073709551615}),
                 "maximum": ("FLOAT", {"default": 10000000, "min": -18446744073709551615, "max": 18446744073709551615}),
+                "mode": (["random", "fixed"],),
             }
         }
 
@@ -11313,7 +11356,7 @@ class WAS_True_Random_Number:
         # Return number
         return (number, )
         
-    def get_random_numbers(self, api_key=None, amount=1, minimum=0, maximum=10):
+    def get_random_numbers(self, api_key=None, amount=1, minimum=0, maximum=10, mode="random"):
         '''Get random number(s) from random.org'''
         if api_key in [None, '00000000-0000-0000-0000-000000000000', '']:
             cstr("No API key provided! A valid RANDOM.ORG API key is required to use `True Random.org Number Generator`").error.print()
@@ -11344,7 +11387,11 @@ class WAS_True_Random_Number:
         return [0]
         
     @classmethod
-    def IS_CHANGED(cls, **kwargs):
+    def IS_CHANGED(cls, api_key, mode, **kwargs):
+        m = hashlib.sha256()
+        m.update(api_key)
+        if mode == 'fixed':
+            return m.digest().hex()
         return float("NaN")
 
 
@@ -11373,9 +11420,9 @@ class WAS_Constant_Number:
         # Return number
         if number_type:
             if number_type == 'integer':
-                return (int(number), )
+                return (int(number), float(number), int(number) )
             elif number_type == 'integer':
-                return (float(number), )
+                return (float(number), float(number), int(number) )
             elif number_type == 'bool':
                 return ((1 if int(number) > 0 else 0), )
             else:
@@ -11710,6 +11757,7 @@ class WAS_Number_Operation:
                 result = +(number_a != number_b)
                 return result, result, int(result)
             else:
+                cstr("Invalid number operation selected.").error.print()
                 return (number_a, number_a, int(number_a))
 
 # NUMBER MULTIPLE OF
