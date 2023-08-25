@@ -418,6 +418,12 @@ def get_sha256(file_path):
             sha256_hash.update(chunk)
     return sha256_hash.hexdigest()
     
+# Batch Seed Generator
+def seed_batch(seed, batches, seeds):
+    rng = np.random.default_rng(seed)
+    btch = [rng.choice(2**32 - 1, seeds, replace=False).tolist() for _ in range(batches)]
+    return btch
+    
 # Download File
 def download_file(url, filename=None, path=None):
     if not filename:
@@ -2079,12 +2085,14 @@ class WAS_Tools_Class():
             self.density = density
             self.use_broadcast_ops = use_broadcast_ops
             self.seed = seed
+            self.generate_points_and_colors()
+            self.calculate_noise(option)
             self.image = self.generateImage(option, flat_mode=flat)
 
-        def generate_points(self):
-            if self.seed is not None:
-                np.random.seed(self.seed)  # Use the provided seed
-            self.points = np.random.randint(0, (self.width, self.height), (self.density, 2))
+        def generate_points_and_colors(self):
+            rng = np.random.default_rng(self.seed)
+            self.points = rng.integers(0, self.width, (self.density, 2))
+            self.colors = rng.integers(0, 256, (self.density, 3))
 
         def calculate_noise(self, option):
             self.data = np.zeros((self.height, self.width))
@@ -2103,21 +2111,12 @@ class WAS_Tools_Class():
             self.data = distances[option]
 
         def generateImage(self, option, flat_mode=False):
-            self.generate_points()
-            if self.use_broadcast_ops:
-                self.broadcast_calculate_noise(option)
-            else:
-                self.calculate_noise(option)
-            
-            non_flat_black_adjusted = np.zeros((self.height, self.width), dtype=np.float32)
-            for h in range(self.height):
-                for w in range(self.width):
-                    closest_point_idx = np.argmin(np.sum((self.points - np.array([w, h])) ** 2, axis=1))
-                    non_flat_black_adjusted[h, w] = self.data[h, w] + self.data[closest_point_idx]
-            
             if flat_mode:
-                flat_color_data = np.ones((self.height, self.width, 3), dtype=np.uint8) * 255  # Initialize as white
-                flat_color_data[..., :2] -= non_flat_black_adjusted[..., np.newaxis] * 255  # Scale adjustment
+                flat_color_data = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                for h in range(self.height):
+                    for w in range(self.width):
+                        closest_point_idx = np.argmin(np.sum((self.points - np.array([w, h])) ** 2, axis=1))
+                        flat_color_data[h, w, :] = self.colors[closest_point_idx]
                 return Image.fromarray(flat_color_data, 'RGB')
             else:
                 min_val, max_val = np.min(self.data), np.max(self.data)
@@ -4163,8 +4162,8 @@ class WAS_Image_Perlin_Power_Fractal:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "width": ("INT", {"default": 512, "max": 2048, "min": 64, "step": 1}),
-                "height": ("INT", {"default": 512, "max": 2048, "min": 64, "step": 1}),
+                "width": ("INT", {"default": 512, "max": 8192, "min": 64, "step": 1}),
+                "height": ("INT", {"default": 512, "max": 8192, "min": 64, "step": 1}),
                 "scale": ("INT", {"default": 100, "max": 2048, "min": 2, "step": 1}),
                 "octaves": ("INT", {"default": 4, "max": 8, "min": 0, "step": 1}),
                 "persistence": ("FLOAT", {"default": 0.5, "max": 100.0, "min": 0.01, "step": 0.01}),
@@ -4186,7 +4185,78 @@ class WAS_Image_Perlin_Power_Fractal:
         
         image = WTools.perlin_power_fractal(width, height, octaves, persistence, lacunarity, exponent, scale, seed)
 
-        return (pil2tensor(image), )        
+        return (pil2tensor(image), )      
+
+# PERLIN POWER FRACTAL LATENT
+
+class WAS_Perlin_Power_Fractal_Latent:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "vae": ("VAE",),
+                "width": ("INT", {"default": 512, "max": 8192, "min": 64, "step": 1}),
+                "height": ("INT", {"default": 512, "max": 8192, "min": 64, "step": 1}),
+                "scale": ("INT", {"default": 100, "max": 2048, "min": 2, "step": 1}),
+                "octaves": ("INT", {"default": 8, "max": 8, "min": 0, "step": 1}),
+                "persistence": ("FLOAT", {"default": 1.0, "max": 100.0, "min": 0.01, "step": 0.01}),
+                "lacunarity": ("FLOAT", {"default": 2.0, "max": 100.0, "min": 0.01, "step": 0.01}),
+                "exponent": ("FLOAT", {"default": 4.0, "max": 100.0, "min": 0.01, "step": 0.01}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}), 
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64, "step": 1})
+            },
+        }
+
+    RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("latents",)
+    FUNCTION = "power_fractal_latent"
+
+    CATEGORY = "WAS Suite/Latent/Generate"
+
+    def power_fractal_latent(self, vae, width, height, scale, octaves, persistence, lacunarity, exponent, seed, batch_size):
+    
+        WTools = WAS_Tools_Class()
+        encoder = nodes.VAEEncode()
+        rgbmix = WAS_Image_RGB_Merge()
+        
+        if batch_size > 1:
+        
+            latents = []
+            seeds = seed_batch(seed, batch_size, 3)
+            
+            for batch in range(batch_size):
+            
+                batch_seeds = seeds[batch]
+                                
+                r = WTools.perlin_power_fractal(width, height, octaves, persistence, lacunarity, exponent, scale, batch_seeds[0])
+                g = WTools.perlin_power_fractal(width, height, octaves, persistence, lacunarity, exponent, scale, batch_seeds[1])
+                b = WTools.perlin_power_fractal(width, height, octaves, persistence, lacunarity, exponent, scale, batch_seeds[2])
+                    
+                rgb_noise = rgbmix.merge_channels(pil2tensor(r), pil2tensor(g), pil2tensor(b))
+                encoded_noise = encoder.encode(pixels=rgb_noise[0], vae=vae)
+                
+                latents.append(encoded_noise[0]['samples'])
+
+            latents = torch.cat(latents)
+            
+            return ({'samples': latents}, )
+            
+        else:
+        
+            r = WTools.perlin_power_fractal(width, height, octaves, persistence, lacunarity, exponent, scale, seed)
+            g = WTools.perlin_power_fractal(width, height, octaves, persistence, lacunarity, exponent, scale, seed+1)
+            b = WTools.perlin_power_fractal(width, height, octaves, persistence, lacunarity, exponent, scale, seed+2)
+                    
+            rgb_noise = rgbmix.merge_channels(pil2tensor(r), pil2tensor(g), pil2tensor(b))
+            
+            tensors = rgb_noise
+            
+        latents = encoder.encode(pixels=tensors[0], vae=vae)
+
+        return latents             
         
 
 # IMAGE VORONOI NOISE FILTER
@@ -4203,9 +4273,12 @@ class WAS_Image_Voronoi_Noise_Filter:
                 "height": ("INT", {"default": 512, "max": 4096, "min": 64, "step": 1}),
                 "density": ("INT", {"default": 50, "max": 256, "min": 10, "step": 2}),
                 "modulator": ("INT", {"default": 0, "max": 8, "min": 0, "step": 1}),
-                "flat": (["False", "True"],),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),                
             },
+            "optional": {
+                "flat": (["False", "True"],),
+                "RGB_output": (["True", "False"],),
+            }
         }
 
     RETURN_TYPES = ("IMAGE",)
@@ -4214,11 +4287,16 @@ class WAS_Image_Voronoi_Noise_Filter:
 
     CATEGORY = "WAS Suite/Image/Generate/Noise"
 
-    def voronoi_noise_filter(self, width, height, density, modulator, flat, seed):
+    def voronoi_noise_filter(self, width, height, density, modulator, seed, flat="False", RGB_output="True"):
     
         WTools = WAS_Tools_Class()
         
-        image = WTools.worley_noise(height=width, width=height, density=density, option=modulator, use_broadcast_ops=True, flat=(flat == "True")).image
+        image = WTools.worley_noise(height=height, width=width, density=density, option=modulator, use_broadcast_ops=True, seed=seed, flat=(flat == "True")).image
+        
+        if RGB_output == "True":
+            image = image.convert("RGB")
+        else:
+            image = image.convert("L")
 
         return (pil2tensor(image), )         
 
@@ -4262,33 +4340,39 @@ class WAS_Image_Power_Noise:
             noise = np.random.normal(0, attenuation, (height, width))
             return noise
 
-        def pink_noise(width, height, frequency, attenuation):
+        def blue_noise(width, height, frequency, attenuation):
             noise = grey_noise(width, height, attenuation)
             scale = 1.0 / (width * height)
-            f = np.fft.fftfreq(height)[:, np.newaxis] ** 2 + np.fft.fftfreq(width) ** 2
+            fy = np.fft.fftfreq(height)[:, np.newaxis] ** 2
+            fx = np.fft.fftfreq(width) ** 2
+            f = fy + fx
             power = np.sqrt(f)
             power[0, 0] = 1
-            noise = np.fft.ifft2(np.fft.fft2(noise) * power)
+            noise = np.fft.ifft2(np.fft.fft2(noise) / power)
             noise *= scale / noise.std()
             return np.real(noise)
 
         def green_noise(width, height, frequency, attenuation):
             noise = grey_noise(width, height, attenuation)
             scale = 1.0 / (width * height)
-            f = np.fft.fftfreq(height)[:, np.newaxis] ** 2 + np.fft.fftfreq(width) ** 2
+            fy = np.fft.fftfreq(height)[:, np.newaxis] ** 2
+            fx = np.fft.fftfreq(width) ** 2
+            f = fy + fx
             power = np.sqrt(f)
             power[0, 0] = 1
             noise = np.fft.ifft2(np.fft.fft2(noise) / np.sqrt(power))
             noise *= scale / noise.std()
             return np.real(noise)
 
-        def blue_noise(width, height, frequency, attenuation):
+        def pink_noise(width, height, frequency, attenuation):
             noise = grey_noise(width, height, attenuation)
             scale = 1.0 / (width * height)
-            f = np.fft.fftfreq(height)[:, np.newaxis] ** 2 + np.fft.fftfreq(width) ** 2
+            fy = np.fft.fftfreq(height)[:, np.newaxis] ** 2
+            fx = np.fft.fftfreq(width) ** 2
+            f = fy + fx
             power = np.sqrt(f)
             power[0, 0] = 1
-            noise = np.fft.ifft2(np.fft.fft2(noise) / power)
+            noise = np.fft.ifft2(np.fft.fft2(noise) * power)
             noise *= scale / noise.std()
             return np.real(noise)
 
@@ -4303,6 +4387,9 @@ class WAS_Image_Power_Noise:
             
         def blend_noise(width, height, masks, noise_types, attenuations):
             blended_image = Image.new("L", (width, height), color=0)
+            fy = np.fft.fftfreq(height)[:, np.newaxis] ** 2
+            fx = np.fft.fftfreq(width) ** 2
+            f = fy + fx
             i = 0
             for mask, noise_type, attenuation in zip(masks, noise_types, attenuations):
                 mask = Image.fromarray((255 * (mask - np.min(mask)) / (np.max(mask) - np.min(mask))).astype(np.uint8).real)
@@ -6414,6 +6501,65 @@ class WAS_Image_Select_Channel:
 
         return channel_img
         
+# IMAGES TO RGB
+
+class WAS_Images_To_RGB:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "image_to_rgb"
+
+    CATEGORY = "WAS Suite/Image"
+
+    def image_to_rgb(self, images):
+
+        if len(images) > 1:
+            tensors = []
+            for image in images:
+                tensors.append(pil2tensor(tensor2pil(image).convert('RGB')))
+            tensors = torch.cat(tensors, dim=0)
+            return (tensors, )
+        else:
+            return (pil2tensor(tensor2pil(images).convert("RGB")), )    
+            
+# IMAGES TO LINEAR
+
+class WAS_Images_To_Linear:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "image_to_linear"
+
+    CATEGORY = "WAS Suite/Image"
+
+    def image_to_linear(self, images):
+
+        if len(images) > 1:
+            tensors = []
+            for image in images:
+                tensors.append(pil2tensor(tensor2pil(image).convert('L')))
+            tensors = torch.cat(tensors, dim=0)
+            return (tensors, )
+        else:
+            return (pil2tensor(tensor2pil(images).convert("L")), )
 
 
 # IMAGE MERGE RGB CHANNELS
@@ -7064,37 +7210,6 @@ class WAS_Load_Image:
         with open(image_path, 'rb') as f:
             m.update(f.read())
         return m.digest().hex()
-        
-        
-# IMAGES TO RGB
-
-class WAS_Images_To_RGB:
-    def __init__(self):
-        pass
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "images": ("IMAGE",),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("images",)
-    FUNCTION = "images_to_rgb"
-
-    CATEGORY = "WAS Suite/Image"
-
-    def images_to_rgb(self, images):
-
-        tensors = []
-        for image in images:
-            tensors.append(pil2tensor(tensor2pil(image).convert("RGB")))
-        tensors = torch.cat(tensors, dim=0)
-
-        return (tensors,)
-        
         
 # MASK BATCH TO MASK
 
@@ -9880,7 +9995,8 @@ class WAS_Text_to_Conditioning:
     CATEGORY = "WAS Suite/Text/Operations"
 
     def text_to_conditioning(self, clip, text):
-        return ([[clip.encode(text), {}]], )
+        encode = clip.encode(text)
+        return ([[encode[0][0][0], encode[0][0][1], {}]], )
 
 
 # TEXT PARSE TOKENS
@@ -11424,7 +11540,8 @@ class WAS_Constant_Number:
             elif number_type == 'integer':
                 return (float(number), float(number), int(number) )
             elif number_type == 'bool':
-                return ((1 if int(number) > 0 else 0), )
+                boolean = (1 if int(number) > 0 else 0)
+                return (int(boolean), float(boolean), int(boolean) )
             else:
                 return (number, float(number), int(number) )
 
@@ -13044,8 +13161,9 @@ NODE_CLASS_MAPPINGS = {
     "Image fDOF Filter": WAS_Image_fDOF,
     "Image to Latent Mask": WAS_Image_To_Mask,
     "Image to Noise": WAS_Image_To_Noise,
-    "Images to RGB": WAS_Images_To_RGB,
     "Image to Seed": WAS_Image_To_Seed,
+    "Images to RGB": WAS_Images_To_RGB,
+    "Images to Linear": WAS_Images_To_Linear,
     "Integer place counter": WAS_Integer_Place_Counter,
     "Image Voronoi Noise Filter": WAS_Image_Voronoi_Noise_Filter,
     "KSampler (Legacy)": WAS_KSampler,
@@ -13093,6 +13211,7 @@ NODE_CLASS_MAPPINGS = {
     "Number to Seed": WAS_Number_To_Seed,
     "Number to String": WAS_Number_To_String,
     "Number to Text": WAS_Number_To_Text,
+    "Perlin Power Fractal Latent": WAS_Perlin_Power_Fractal_Latent,
     "Prompt Styles Selector": WAS_Prompt_Styles_Selector,
     "Prompt Multiple Styles Selector": WAS_Prompt_Multiple_Styles_Selector,
     "Random Number": WAS_Random_Number,
