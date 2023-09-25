@@ -9755,18 +9755,19 @@ class WAS_Search_and_Replace:
             }
         }
 
-    RETURN_TYPES = (TEXT_TYPE,)
+    RETURN_TYPES = (TEXT_TYPE, "NUMBER", "FLOAT", "INT")
+    RETURN_NAMES = ("result_text", "replacement_count_number", "replacement_count_float", "replacement_count_int")
     FUNCTION = "text_search_and_replace"
 
     CATEGORY = "WAS Suite/Text/Search"
 
     def text_search_and_replace(self, text, find, replace):
-        return (self.replace_substring(text, find, replace), )
+        modified_text, count = self.replace_substring(text, find, replace)
+        return (modified_text, count, float(count), int(count))
 
     def replace_substring(self, text, find, replace):
-        import re
-        text = re.sub(find, replace, text)
-        return text
+        modified_text, count = re.subn(find, replace, text)
+        return (modified_text, count)
         
         
 # Text Shuffle
@@ -9819,21 +9820,20 @@ class WAS_Search_and_Replace_Input:
             }
         }
 
-    RETURN_TYPES = (TEXT_TYPE,)
+    RETURN_TYPES = (TEXT_TYPE, "NUMBER", "FLOAT", "INT")
+    RETURN_NAMES = ("result_text", "replacement_count_number", "replacement_count_float", "replacement_count_int")
     FUNCTION = "text_search_and_replace"
 
     CATEGORY = "WAS Suite/Text/Search"
 
     def text_search_and_replace(self, text, find, replace):
-   
-        # Parse Text
+        count = 0
         new_text = text
-        tcount = new_text.count(find)
-        for _ in range(tcount):
+        while find in new_text:
             new_text = new_text.replace(find, replace, 1)
+            count += 1
+        return (new_text, count, float(count), int(count))
 
-        return (new_text, )
-        
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         return float("NaN")
