@@ -24,9 +24,8 @@ import comfy.samplers
 import comfy.sd
 import comfy.utils
 import comfy.clip_vision
-import model_management
+import comfy.model_management
 import folder_paths as comfy_paths
-import model_management
 from comfy_extras.chainner_models import model_loading
 import glob
 import hashlib
@@ -42,9 +41,12 @@ import requests
 import socket
 import subprocess
 import sys
+import datetime
 import time
 import torch
 from tqdm import tqdm
+
+p310_plus = (sys.version_info >= (3, 10))
 
 MANIFEST = {
     "name": "WAS Node Suite",
@@ -1195,7 +1197,7 @@ class WAS_Tools_Class():
         def generate_transition_frames(self, start_frame, end_image, num_frames):
 
             if start_frame is None:
-                return [image]
+                return []
                 
             start_frame = start_frame.convert("RGBA")
             end_image = end_image.convert("RGBA")
@@ -5690,19 +5692,18 @@ class WAS_Remove_Rembg:
 
         # Set bgcolor
         bgrgba = None
-        match background_color:
-            case "black":
-                bgrgba = [0, 0, 0, 255]
-            case "white":
-                bgrgba = [255, 255, 255, 255]
-            case "magenta":
-                bgrgba = [255, 0, 255, 255]
-            case "chroma green":
-                bgrgba = [0, 177, 64, 255]
-            case "chroma blue":
-                bgrgba = [0, 71, 187, 255]
-            case _:
-                bgrgba = None
+        if background_color == "black":
+            bgrgba = [0, 0, 0, 255]
+        elif background_color == "white":
+            bgrgba = [255, 255, 255, 255]
+        elif background_color == "magenta":
+            bgrgba = [255, 0, 255, 255]
+        elif background_color == "chroma green":
+            bgrgba = [0, 177, 64, 255]
+        elif background_color == "chroma blue":
+            bgrgba = [0, 71, 187, 255]
+        else:
+            bgrgba = None
 
         if transparency and bgrgba is not None:
             bgrgba[3] = 0
@@ -6734,7 +6735,7 @@ class WAS_Image_Ambient_Occlusion:
                             tile_rgb = rgb_normalized[tile_upper:tile_lower, tile_left:tile_right]
                             tile_depth = depth_normalized[tile_upper:tile_lower, tile_left:tile_right]
 
-                            future = executor.submit(process_tile, tile_rgb, tile_depth, tile_x, tile_y, radius)
+                            future = executor.submit(self.process_tile, tile_rgb, tile_depth, tile_x, tile_y, radius)
                             futures.append(future)
 
                     for future in concurrent.futures.as_completed(futures):
@@ -9510,7 +9511,7 @@ class WAS_Text_String_Truncate:
                 "text": ("STRING", {"forceInput": True}),
                 "truncate_by": (["characters", "words"],),
                 "truncate_from": (["end", "beginning"],),
-                "truncate_to": ("INT", {"default": 10, "min": 1, "max": 99999999, "step": 1}),
+                "truncate_to": ("INT", {"default": 10, "min": -99999999, "max": 99999999, "step": 1}),
             },
             "optional": {
                 "text_b": ("STRING", {"forceInput": True}),
@@ -9539,14 +9540,15 @@ class WAS_Text_String_Truncate:
             cstr("Invalid truncate_by. 'truncate_by' must be either 'characters' or 'words'.").error.print()
         if truncate_by == 'characters':
             if mode == 'beginning':
-                return string[:max_length]
+                return string[:max_length] if max_length >= 0 else string[max_length:]
             else:
-                return string[-max_length:]
+                return string[-max_length:] if max_length >= 0 else string[:max_length]
         words = string.split()
         if mode == 'beginning':
-            return ' '.join(words[:max_length])
+            return ' '.join(words[:max_length]) if max_length >= 0 else ' '.join(words[max_length:])
         else:
-            return ' '.join(words[-max_length:])
+            return ' '.join(words[-max_length:]) if max_length >= 0 else ' '.join(words[:max_length])
+
 
 
 
@@ -10955,74 +10957,6 @@ class WAS_CLIPSeg_Batch:
         return (images_tensor, masks_tensor, mask_images_tensor)
 
 
-# Lang SAM Model Loader
-# TODO: Fix Lang SAM Dependency Issues 
-
-class WAS_Lang_SAM_Model_Loader:
-    def __init__(self):
-        pass
-        
-    @classmethod
-    def INPUT_TYPES(self):
-        return {
-            "required": {
-                "model_type": (["vit_b", "vit_l", "vit_h"],),
-            }
-        }
-
-    RETURN_TYPES = ("LANG_SAM_MODEL",)
-    RETURN_NAMES = ("lang_sam_model",)
-    
-    CATEGORY = "WAS Suite/Loaders"
-    
-    FUNCTION = "lang_sam_model"
-    
-    def lang_sam_model(self, model_type):
-
-        from lang_sam import LangSAM
-        
-        model = LangSAM(model_type=model_type)
-        model.device = 'cpu'
-
-        return ( model, )
-
-
-# Lang SAM Masking
-
-class WAS_Lang_SAM_Masking:
-    def __init__(self):
-        pass
-        
-    @classmethod
-    def INPUT_TYPES(self):
-        return {
-            "required": {
-                "lang_sam_model": ("LANG_SAM_MODEL",),
-                "image": ("IMAGE",),
-                "prompt": ("STRING", {"default": "", "multiline": False}),
-            }
-        }
-
-    RETURN_TYPES = ("LANG_SAM_MODEL",)
-    RETURN_NAMES = ("lang_sam_model",)
-    
-    CATEGORY = "WAS Suite/Image/Masking"
-    
-    FUNCTION = "lang_sam_masking"
-    
-    def lang_sam_masking(self, lang_sam_model, image, prompt):
-
-        lang_sam_model.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        masks, boxes, phrases, logits = lang_sam_model.predict(tensor2pil(image), prompt)
-        
-        print(masks)
-        print(boxes)
-        print(logits)
-
-        return ( LandSAM(), )
-
-
 # SAM MODEL LOADER
 
 class WAS_SAM_Model_Loader:
@@ -11665,8 +11599,9 @@ class WAS_Number_Counter:
         return {
             "required": {
                 "number_type": (["integer", "float"],),
-                "mode": (["increment", "decrement"],),
+                "mode": (["increment", "decrement", "increment_to_stop", "decrement_to_stop"],),
                 "start": ("FLOAT", {"default": 0, "min": -18446744073709551615, "max": 18446744073709551615, "step": 0.01}),
+                "stop": ("FLOAT", {"default": 0, "min": -18446744073709551615, "max": 18446744073709551615, "step": 0.01}),
                 "step": ("FLOAT", {"default": 1, "min": 0, "max": 99999, "step": 0.01}), 
             },
             "optional": {
@@ -11687,9 +11622,7 @@ class WAS_Number_Counter:
 
     CATEGORY = "WAS Suite/Number"
 
-    def increment_number(self, number_type, mode, start, step, unique_id, reset_bool=0):
-    
-        print(unique_id)
+    def increment_number(self, number_type, mode, start, stop, step, unique_id, reset_bool=0):
 
         counter = int(start) if mode == 'integer' else start
         if self.counters.__contains__(unique_id):
@@ -11700,8 +11633,12 @@ class WAS_Number_Counter:
             
         if mode == 'increment':
             counter += step
-        else:
+        elif mode == 'deccrement':
             counter -= step
+        elif mode == 'increment_to_stop':
+            counter = counter + step if counter < stop else counter
+        elif mode == 'decrement_to_stop':
+            counter = counter - step if counter > stop else counter 
             
         self.counters[unique_id] = counter
         
@@ -11710,8 +11647,6 @@ class WAS_Number_Counter:
         return ( result, float(counter), int(counter) )
             
         
-
-
 # NUMBER TO SEED
 
 class WAS_Number_To_Seed:
@@ -12669,7 +12604,7 @@ class WAS_Diffusers_Loader:
                     model_path = os.path.join(search_path, model_path)
                     break
 
-        out = comfy.diffusers_convert.load_diffusers(model_path, fp16=model_management.should_use_fp16(), output_vae=output_vae, output_clip=output_clip, embedding_directory=comfy_paths.get_folder_paths("embeddings"))
+        out = comfy.diffusers_convert.load_diffusers(model_path, fp16=comfy.model_management.should_use_fp16(), output_vae=output_vae, output_clip=output_clip, embedding_directory=comfy_paths.get_folder_paths("embeddings"))
         return (out[0], out[1], out[2], os.path.basename(model_path))
 
 
@@ -12688,6 +12623,34 @@ class WAS_unCLIP_Checkpoint_Loader:
         ckpt_path = comfy_paths.get_full_path("checkpoints", ckpt_name)
         out = comfy.sd.load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, output_clipvision=True, embedding_directory=comfy_paths.get_folder_paths("embeddings"))
         return (out[0], out[1], out[2], out[3], os.path.splitext(os.path.basename(ckpt_name))[0])
+
+
+class WAS_Lora_Input_Switch:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_a": ("MODEL",),
+                "clip_a": ("CLIP",),
+                "model_b": ("MODEL",),
+                "clip_b": ("CLIP",),
+                "boolean_number": ("NUMBER",),
+            }
+        }
+    RETURN_TYPES = ("MODEL", "CLIP")
+    FUNCTION = "lora_input_switch"
+
+    CATEGORY = "WAS Suite/Logic"
+
+    def lora_input_switch(self, model_a, clip_a, model_b, clip_b, boolean_number=1):
+        if int(round(boolean_number)) == 1:
+            return (model_a, clip_a)
+        else:
+            return (model_b, clip_b)
+
 
 class WAS_Lora_Loader:
     def __init__(self):
@@ -13281,6 +13244,7 @@ NODE_CLASS_MAPPINGS = {
     "Load Image Batch": WAS_Load_Image_Batch,
     "Load Text File": WAS_Text_Load_From_File,
     "Load Lora": WAS_Lora_Loader,
+    "Lora Input Switch": WAS_Lora_Input_Switch,
     "Masks Add": WAS_Mask_Add,
     "Masks Subtract": WAS_Mask_Subtract,
     "Mask Arbitrary Region": WAS_Mask_Arbitrary_Region,
@@ -13428,7 +13392,10 @@ if os.path.exists(BKAdvCLIP_dir):
             new_text, text_vars = parse_prompt_vars(new_text)
             cstr(f"CLIPTextEncode Prased Prompt:\n {new_text}").msg.print()
             
-            encode = AdvancedCLIPTextEncode().encode(clip, new_text, token_normalization, weight_interpretation)     
+            encode = AdvancedCLIPTextEncode().encode(clip, new_text, token_normalization, weight_interpretation)  
+
+            sys.path.remove(BKAdvCLIP_dir)
+
             return ([[encode[0][0][0], encode[0][0][1]]], new_text, text, { "ui": { "string": new_text } } )
                  
                 
