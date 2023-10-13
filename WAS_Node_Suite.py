@@ -3562,12 +3562,14 @@ class WAS_Image_Paste_Crop_Location:
     CATEGORY = "WAS Suite/Image/Process"
     
     def image_paste_crop_location(self, image, crop_image, top=0, left=0, right=256, bottom=256, crop_blending=0.25, crop_sharpening=0):
-
         result_image, result_mask = self.paste_image(tensor2pil(image), tensor2pil(crop_image), top, left, right, bottom, crop_blending, crop_sharpening)
         return (result_image, result_mask)
     
     def paste_image(self, image, crop_image, top=0, left=0, right=256, bottom=256, blend_amount=0.25, sharpen_amount=1):
-    
+
+        image = image.convert("RGBA")
+        crop_image = crop_image.convert("RGBA")
+        
         def inset_border(image, border_width=20, border_color=(0)):
             width, height = image.size
             bordered_image = Image.new(image.mode, (width, height), border_color)
@@ -3575,7 +3577,7 @@ class WAS_Image_Paste_Crop_Location:
             draw = ImageDraw.Draw(bordered_image)
             draw.rectangle((0, 0, width-1, height-1), outline=border_color, width=border_width)
             return bordered_image
-    
+
         img_width, img_height = image.size
         
         # Ensure that the coordinates are within the image bounds
@@ -3585,9 +3587,9 @@ class WAS_Image_Paste_Crop_Location:
         right = min(max(right, 0), img_width)
         
         crop_size = (right - left, bottom - top)
-        crop_img = crop_image.convert("RGB")
-        crop_img = crop_img.resize(crop_size)
-            
+        crop_img = crop_image.resize(crop_size)
+        crop_img = crop_img.convert("RGBA")
+
         if sharpen_amount > 0:
             for _ in range(sharpen_amount):
                 crop_img = crop_img.filter(ImageFilter.SHARPEN)
@@ -3598,22 +3600,23 @@ class WAS_Image_Paste_Crop_Location:
             blend_amount = 0.0
         blend_ratio = (max(crop_size) / 2) * float(blend_amount)
 
-        blend = image.convert("RGBA")
+        blend = image.copy()
         mask = Image.new("L", image.size, 0)
         
         mask_block = Image.new("L", crop_size, 255)
         mask_block = inset_border(mask_block, int(blend_ratio/2), (0))
      
         Image.Image.paste(mask, mask_block, (left, top))
-        Image.Image.paste(blend, crop_img, (left, top))
-
+        blend.paste(crop_img, (left, top), crop_img)
+        
         mask = mask.filter(ImageFilter.BoxBlur(radius=blend_ratio/4))
         mask = mask.filter(ImageFilter.GaussianBlur(radius=blend_ratio/4))
-
+        
         blend.putalpha(mask)
-        image = Image.alpha_composite(image.convert("RGBA"), blend)
+        image = Image.alpha_composite(image, blend)
             
-        return (pil2tensor(image.convert('RGB')), pil2tensor(mask.convert('RGB'))) 
+        return (pil2tensor(image), pil2tensor(mask.convert('RGB')))
+    
 
 # IMAGE GRID IMAGE
 
@@ -6980,9 +6983,10 @@ class WAS_Export_API:
                 "filename_prefix": ("STRING", {"default": "ComfyUI_Prompt"}),
                 "filename_delimiter": ("STRING", {"default":"_"}),
                 "filename_number_padding": ("INT", {"default":4, "min":2, "max":9, "step":1}),
+                "parse_text_tokens": ("BOOLEAN", {"default": False})
             },
             "hidden": {
-                "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"
+                "prompt": "PROMPT"
             }
         }
 
@@ -6993,7 +6997,7 @@ class WAS_Export_API:
     CATEGORY = "WAS Suite/Debug"
 
     def export_api(self, output_path=None, filename_prefix="ComfyUI", filename_number_padding=4,
-                    filename_delimiter='_', prompt=None, extra_pnginfo=None, save_prompt_api="true"):
+                    filename_delimiter='_', prompt=None, save_prompt_api="true", parse_text_tokens=False):
         delimiter = filename_delimiter
         number_padding = filename_number_padding if filename_number_padding > 1 else 4
 
@@ -7021,6 +7025,10 @@ class WAS_Export_API:
         output_file = os.path.abspath(os.path.join(output_path, file))
 
         if prompt:
+
+            if parse_text_tokens:
+                prompt = self.parse_prompt(prompt, tokens, keys_to_parse)
+
             prompt_json = json.dumps(prompt, indent=4)
             cstr("Prompt API JSON").msg.print()
             print(prompt_json)
@@ -7033,6 +7041,20 @@ class WAS_Export_API:
                 cstr(f"Output file path: {output_file}").msg.print()
 
         return {"ui": {"string": prompt_json}}
+
+    def parse_prompt(self, obj, tokens, keys_to_parse):
+        if isinstance(obj, dict):
+            return {
+                key: self.parse_prompt(value, tokens, keys_to_parse) 
+                if key in keys_to_parse else value 
+                for key, value in obj.items()
+            }
+        elif isinstance(obj, list):
+            return [self.parse_prompt(element, tokens, keys_to_parse) for element in obj]
+        elif isinstance(obj, str):
+            return tokens.parseTokens(obj)
+        else:
+            return obj
 
 
 # Image Save (NSP Compatible)
@@ -7111,9 +7133,9 @@ class WAS_Image_Save:
         
         # Find existing counter values
         if filename_number_start == 'true':
-            pattern = f"(\\d{{{filename_number_padding}}}){re.escape(delimiter)}{re.escape(filename_prefix)}"
+            pattern = f"(\\d+){re.escape(delimiter)}{re.escape(filename_prefix)}"
         else:
-            pattern = f"{re.escape(filename_prefix)}{re.escape(delimiter)}(\\d{{{filename_number_padding}}})"
+            pattern = f"{re.escape(filename_prefix)}{re.escape(delimiter)}(\\d+)"
         existing_counters = [
             int(re.search(pattern, filename).group(1))
             for filename in os.listdir(output_path)
@@ -11379,8 +11401,8 @@ class WAS_Bounded_Image_Blend_With_Mask:
     def INPUT_TYPES(self):
         return {
             "required": {
-                "target": ("IMAGE",),
-                "target_mask": ("MASK",),
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
                 "target_bounds": ("IMAGE_BOUNDS",),
                 "source": ("IMAGE",),
                 "blend_factor": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0}),
@@ -11393,9 +11415,10 @@ class WAS_Bounded_Image_Blend_With_Mask:
     
     CATEGORY = "WAS Suite/Image/Bound"
     
-    def bounded_image_crop_with_mask(self, image, mask, padding_left, padding_right, padding_top, padding_bottom):
+    def bounded_image_blend_with_mask(self, image, mask, target_bounds, padding_left, padding_right, padding_top, padding_bottom):
         cropped_images = []
         bounds = []
+        rmin, rmax, cmin, cmax = target_bounds
         for img, msk in zip(image, mask):
             rows = torch.any(msk, axis=1)
             cols = torch.any(msk, axis=0)
