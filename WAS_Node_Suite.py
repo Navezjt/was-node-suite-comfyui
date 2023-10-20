@@ -2947,7 +2947,6 @@ class WAS_Image_Style_Filter:
                     "perpetua",
                     "reyes",
                     "rise",
-                    "sci-fi",
                     "slumber",
                     "stinson",
                     "toaster",
@@ -7166,14 +7165,30 @@ class WAS_Image_Save:
             i = 255. * image.cpu().numpy()
             img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
             
-            metadata = PngInfo()
-            if embed_workflow == 'true':
+            # Delegate metadata/pnginfo
+            if extension == 'webp':
+                img_exif = img.getexif()
+                workflow_metadata = ''
+                prompt_str = ''
                 if prompt is not None:
-                    metadata.add_text("prompt", json.dumps(prompt))
+                    prompt_str = json.dumps(prompt)
+                    img_exif[0x010f] = "Prompt:" + prompt_str
                 if extra_pnginfo is not None:
                     for x in extra_pnginfo:
-                        metadata.add_text(x, json.dumps(extra_pnginfo[x]))
+                        workflow_metadata += json.dumps(extra_pnginfo[x])
+                img_exif[0x010e] = "Workflow:" + workflow_metadata
+                exif_data = img_exif.tobytes()
+            else:
+                metadata = PngInfo()
+                if embed_workflow == 'true':
+                    if prompt is not None:
+                        metadata.add_text("prompt", json.dumps(prompt))
+                    if extra_pnginfo is not None:
+                        for x in extra_pnginfo:
+                            metadata.add_text(x, json.dumps(extra_pnginfo[x]))
+                exif_data = metadata
 
+            # Delegate the filename stuffs
             if overwrite_mode == 'prefix_as_filename':
                 file = f"{filename_prefix}{file_extension}"
             else:
@@ -7183,22 +7198,27 @@ class WAS_Image_Save:
                     file = f"{filename_prefix}{delimiter}{counter:0{number_padding}}{file_extension}"
                 if os.path.exists(os.path.join(output_path, file)):
                     counter += 1
+
+            # Save the images
             try:
                 output_file = os.path.abspath(os.path.join(output_path, file))
-                if extension == 'png':
-                    img.save(output_file,
-                             pnginfo=metadata, optimize=True)
-                elif extension in ["jpg", "jpeg"]:
-                    img.save(output_file,
-                             quality=quality, optimize=True)
-                elif extension == 'tiff':
+                if extension in ["jpg", "jpeg"]:
                     img.save(output_file,
                              quality=quality, optimize=True)
                 elif extension == 'webp':
-                    img.save(output_file, quality=quality, 
-                                lossless=lossless_webp, exif=metadata)
+                    img.save(output_file, 
+                             quality=quality, lossless=lossless_webp, exif=exif_data)
+                elif extension == 'png':
+                    img.save(output_file, 
+                             pnginfo=exif_data, optimize=True)
                 elif extension == 'bmp':
                     img.save(output_file)
+                elif extension == 'tiff':
+                    img.save(output_file,
+                             quality=quality, optimize=True)
+                else:
+                    img.save(output_file, 
+                             pnginfo=exif_data, optimize=True)
                 
                 cstr(f"Image file saved to: {output_file}").msg.print()
                 
@@ -7264,7 +7284,6 @@ class WAS_Image_Save:
             return {"ui": {"images": results}}
         else:
             return {"ui": {"images": []}}
-            
 
     def get_subfolder_path(self, image_path, output_path):
         output_parts = output_path.strip(os.sep).split(os.sep)
@@ -7319,8 +7338,9 @@ class WAS_Load_Image:
         # Update history
         update_history_images(image_path)
 
+        image = i
         if not RGBA:
-            image = i.convert('RGB')
+            image = image.convert('RGB')
         image = np.array(image).astype(np.float32) / 255.0
         image = torch.from_numpy(image)[None,]
 
@@ -11401,8 +11421,8 @@ class WAS_Bounded_Image_Blend_With_Mask:
     def INPUT_TYPES(self):
         return {
             "required": {
-                "image": ("IMAGE",),
-                "mask": ("MASK",),
+                "target": ("IMAGE",),
+                "target_mask": ("MASK",),
                 "target_bounds": ("IMAGE_BOUNDS",),
                 "source": ("IMAGE",),
                 "blend_factor": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0}),
@@ -11415,22 +11435,20 @@ class WAS_Bounded_Image_Blend_With_Mask:
     
     CATEGORY = "WAS Suite/Image/Bound"
     
-    def bounded_image_blend_with_mask(self, image, mask, target_bounds, padding_left, padding_right, padding_top, padding_bottom):
-        cropped_images = []
-        bounds = []
+    def bounded_image_blend_with_mask(self, target, target_mask, target_bounds, source, blend_factor, feathering):
+        target_pil = Image.fromarray((target.squeeze(0).cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
+        target_mask_pil = Image.fromarray((target_mask.cpu().numpy() * 255).astype(np.uint8), mode='L')
+        source_pil = Image.fromarray((source.squeeze(0).cpu().numpy() * 255).astype(np.uint8))
         rmin, rmax, cmin, cmax = target_bounds
-        for img, msk in zip(image, mask):
-            rows = torch.any(msk, axis=1)
-            cols = torch.any(msk, axis=0)
-            rmin, rmax = torch.where(rows)[0][[0, -1]]
-            cmin, cmax = torch.where(cols)[0][[0, -1]]
-            rmin = max(rmin - padding_top, 0)
-            rmax = min(rmax + padding_bottom, msk.shape[0] - 1)
-            cmin = max(cmin - padding_left, 0)
-            cmax = min(cmax + padding_right, msk.shape[1] - 1)
-            cropped_images.append(img[:, rmin:rmax + 1, cmin:cmax + 1, :])
-            bounds.append((rmin, rmax, cmin, cmax))
-        return (torch.cat(cropped_images, dim=0), bounds)
+        source_positioned = Image.new(target_pil.mode, target_pil.size)
+        source_positioned.paste(source_pil, (cmin, rmin))
+        blend_mask = target_mask_pil.point(lambda p: p * blend_factor).convert('L')
+        if feathering > 0:
+            blend_mask = blend_mask.filter(ImageFilter.GaussianBlur(radius=feathering))
+        result = Image.composite(source_positioned, target_pil, blend_mask)
+        result_tensor = torch.from_numpy(np.array(result).astype(np.float32) / 255).unsqueeze(0)
+        
+        return (result_tensor,)
 
 class WAS_Bounded_Image_Crop_With_Mask:
     def __init__(self):
