@@ -7519,6 +7519,11 @@ class WAS_Mask_To_Image:
             tensor = masks.permute(0, 2, 3, 1)
             tensor_rgb = torch.cat([tensor] * 3, dim=-1)
             return (tensor_rgb,)
+        elif masks.ndim == 3:
+            # If Input has shape [N, H, W]
+            tensor = masks.unsqueeze(-1)
+            tensor_rgb = torch.cat([tensor] * 3, dim=-1)
+            return (tensor_rgb, )
         elif masks.ndim == 2:
             # If input has shape [H, W]
             tensor = masks.unsqueeze(0).unsqueeze(-1)
@@ -9453,6 +9458,7 @@ class WAS_Text_List_Concatenate:
             "required": {
                 "list_a": ("LIST", {"forceInput": True}),
                 "list_b": ("LIST", {"forceInput": True}),
+                "delimiter": ("STRING", {"forceInput": True}),
             },
             "optional": {
                 "list_c": ("LIST", {"forceInput": True}),
@@ -9840,11 +9846,12 @@ class WAS_Text_Concatenate:
             "required": {
                 "text_a": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
                 "text_b": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "linebreak_addition": (['false','true'], ),
+                "linebreak_addition": (['false', 'true'],),
             },
             "optional": {
                 "text_c": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
                 "text_d": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "delimiter": ('STRING', {"forceInput": False}),
             }
         }
 
@@ -9853,13 +9860,26 @@ class WAS_Text_Concatenate:
 
     CATEGORY = "WAS Suite/Text"
 
-    def text_concatenate(self, text_a, text_b, text_c=None, text_d=None, linebreak_addition='false'):
-        return_text = text_a + ("\n" if linebreak_addition == 'true' else '') + text_b
+    def text_concatenate(self, text_a, text_b, text_c=None, text_d=None, linebreak_addition='false', delimiter=''):
+        # Initialize return_text with text_a
+        return_text = text_a
+
+        def append_text(base_text, new_text):
+            if linebreak_addition == 'true':
+                return base_text + "\n" + new_text
+            else:
+                return base_text + delimiter + new_text
+
+        return_text = append_text(return_text, text_b)
+
         if text_c:
-            return_text = return_text + ("\n" if linebreak_addition == 'true' else '') + text_c
+            return_text = append_text(return_text, text_c)
+
         if text_d:
-            return_text = return_text + ("\n" if linebreak_addition == 'true' else '') + text_d
+            return_text = append_text(return_text, text_d)
+
         return (return_text, )
+
 
 
 # Text Search and Replace
@@ -11543,7 +11563,7 @@ class WAS_Random_Number:
                 return
 
         # Return number
-        return (number, float(number), int(number))
+        return (number, float(number), round(number))
         
     @classmethod
     def IS_CHANGED(cls, seed, **kwargs):
@@ -11917,7 +11937,7 @@ class WAS_Boolean:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "boolean_number": ("INT", {"default":1, "min":0, "max":1, "step":1}),
+                "boolean_number": ("FLOAT", {"default":1, "min":0, "max":1, "step":1}),
             }
         }
 
