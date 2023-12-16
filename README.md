@@ -11,6 +11,7 @@
 
 # Important Updates
 
+- **12/15/2023** WAS-NS is not under active development. I do not have the time and have other obligations. Feel free to fork and continue the project. I will approve appropriate and beneficial PRs. 
 - **[Updated 10/8/2023]** BLIP is now a shipped module of WAS-NS and no longer requires the BLIP Repo
  - **[Updated 5/29/2023]** `ASCII` **is deprecated**. The new preferred method of text node output is `STRING`. This is a change from `ASCII` so that it is more clear what data is being passed.
    - The `was_suite_config.json` will automatically set `use_legacy_ascii_text` to `false`. 
@@ -294,8 +295,10 @@ The token name can be anything excluding the `:` character to define your token.
     - Example: `[hostname]_[time]__[time(%Y-%m-%d__%I-%M%p)]` would output: **SKYNET-MASTER_1680897261__2023-04-07__07-54PM**
   - [hostname]
     - The hostname of the system executing ComfyUI
-  - [user]
-    - The user that is executing ComfyUI
+  - [cuda_device]
+    - The cuda device from `comfy.model_management.get_cuda_device()`
+  - [cuda_name]
+    - The cuda name from `comfy.model_management.get_cuda_device_name()`
     
 <br>
     
