@@ -145,10 +145,12 @@ MIDAS_INSTALLED = False
 CUSTOM_NODES_DIR = comfy_paths.folder_names_and_paths["custom_nodes"][0][0]
 MODELS_DIR =  comfy_paths.models_dir
 WAS_SUITE_ROOT = os.path.dirname(NODE_FILE)
-WAS_DATABASE = os.path.join(WAS_SUITE_ROOT, 'was_suite_settings.json')
-WAS_HISTORY_DATABASE = os.path.join(WAS_SUITE_ROOT, 'was_history.json')
-WAS_CONFIG_FILE = os.path.join(WAS_SUITE_ROOT, 'was_suite_config.json')
-STYLES_PATH = os.path.join(WAS_SUITE_ROOT, 'styles.json')
+WAS_CONFIG_DIR = os.environ.get('WAS_CONFIG_DIR', WAS_SUITE_ROOT)
+WAS_DATABASE = os.path.join(WAS_CONFIG_DIR, 'was_suite_settings.json')
+WAS_HISTORY_DATABASE = os.path.join(WAS_CONFIG_DIR, 'was_history.json')
+WAS_CONFIG_FILE = os.path.join(WAS_CONFIG_DIR, 'was_suite_config.json')
+STYLES_PATH = os.path.join(WAS_CONFIG_DIR, 'styles.json')
+DEFAULT_NSP_PANTRY_PATH = os.path.join(WAS_CONFIG_DIR, 'nsp_pantry.json')
 ALLOWED_EXT = ('.jpeg', '.jpg', '.png',
                         '.tiff', '.gif', '.bmp', '.webp')
                         
@@ -470,7 +472,7 @@ def nsp_parse(text, seed=0, noodle_key='__', nspterminology=None, pantry_path=No
     if nspterminology is None:
         # Fetch the NSP Pantry
         if pantry_path is None:
-            pantry_path = os.path.join(WAS_SUITE_ROOT, 'nsp_pantry.json')
+            pantry_path = DEFAULT_NSP_PANTRY_PATH
         if not os.path.exists(pantry_path):
             response = urlopen('https://raw.githubusercontent.com/WASasquatch/noodle-soup-prompts/main/nsp_pantry.json')
             tmp_pantry = json.loads(response.read())
@@ -5062,7 +5064,7 @@ class WAS_Load_Image_Batch:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "mode": (["single_image", "incremental_image"],),
+                "mode": (["single_image", "incremental_image", "random"],),
                 "index": ("INT", {"default": 0, "min": 0, "max": 150000, "step": 1}),
                 "label": ("STRING", {"default": 'Batch 001', "multiline": False}),
                 "path": ("STRING", {"default": '', "multiline": False}),
@@ -5093,11 +5095,18 @@ class WAS_Load_Image_Batch:
             if image == None:
                 cstr(f"No valid image was found for the inded `{index}`").error.print()
                 return (None, None)
-        else:
+        elif mode == 'incremental_image':
             image, filename = fl.get_next_image()
             if image == None:
                 cstr(f"No valid image was found for the next ID. Did you remove images from the source directory?").error.print()
                 return (None, None)
+        else:
+            newindex = int(random.random() * len(fl.image_paths))
+            image, filename = fl.get_image_by_id(newindex)
+            if image == None:
+                cstr(f"No valid image was found for the next ID. Did you remove images from the source directory?").error.print()
+                return (None, None)
+            
 
         # Update history
         update_history_images(new_paths)
@@ -9445,8 +9454,9 @@ class WAS_Text_Multiline:
         new_text = tokens.parseTokens(new_text)
         
         return (new_text, )   
-        
-# Text List Node
+
+
+# Text List Concatenate Node
 
 class WAS_Text_List_Concatenate:
     def __init__(self):
@@ -9456,32 +9466,35 @@ class WAS_Text_List_Concatenate:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "list_a": ("LIST", {"forceInput": True}),
-                "list_b": ("LIST", {"forceInput": True}),
-                "delimiter": ("STRING", {"forceInput": True}),
             },
             "optional": {
+                "list_a": ("LIST", {"forceInput": True}),
+                "list_b": ("LIST", {"forceInput": True}),
                 "list_c": ("LIST", {"forceInput": True}),
                 "list_d": ("LIST", {"forceInput": True}),
             }
         }
+
     RETURN_TYPES = ("LIST",)
     FUNCTION = "text_concatenate_list"
 
     CATEGORY = "WAS Suite/Text"
 
-    def text_concatenate_list(self, list_a, list_b=None, list_c=None, list_d=None):
-        
-        text_list = list_a + list_b
-    
-        if list_c:
-            text_list + list_c
-        if list_d:
-            text_list + list_d
+    def text_concatenate_list(self, **kwargs):
+        merged_list: list[str] = []
 
-        return (text_list,)      
-        
-# Text List Concatenate Node
+        # Iterate over the received inputs in sorted order.
+        for k in sorted(kwargs.keys()):
+            v = kwargs[k]
+
+            # Only process "list" input ports.
+            if isinstance(v, list):
+                merged_list += v
+
+        return (merged_list,)
+
+
+# Text List Node
 
 class WAS_Text_List:
     def __init__(self):
@@ -9491,9 +9504,9 @@ class WAS_Text_List:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text_a": ("STRING", {"forceInput": True}),
             },
             "optional": {
+                "text_a": ("STRING", {"forceInput": True}),
                 "text_b": ("STRING", {"forceInput": True}),
                 "text_c": ("STRING", {"forceInput": True}),
                 "text_d": ("STRING", {"forceInput": True}),
@@ -9507,24 +9520,49 @@ class WAS_Text_List:
 
     CATEGORY = "WAS Suite/Text"
 
-    def text_as_list(self, text_a, text_b=None, text_c=None, text_d=None, text_e=None, text_f=None, text_g=None):
-        
-        text_list = [text_a,]
-    
-        if text_b:
-            text_list.append(text_b)
-        if text_c:
-            text_list.append(text_c)
-        if text_d:
-            text_list.append(text_d)
-        if text_e:
-            text_list.append(text_e)
-        if text_f:
-            text_list.append(text_f)
-        if text_g:
-            text_list.append(text_g)
+    def text_as_list(self, **kwargs):
+        text_list: list[str] = []
+
+        # Iterate over the received inputs in sorted order.
+        for k in sorted(kwargs.keys()):
+            v = kwargs[k]
+
+            # Only process string input ports.
+            if isinstance(v, str):
+                text_list.append(v)
 
         return (text_list,)
+
+
+# Text List to Text Node
+
+class WAS_Text_List_to_Text:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "delimiter": ("STRING", {"default": ", "}),
+                "text_list": ("LIST", {"forceInput": True}),
+            }
+        }
+
+    RETURN_TYPES = (TEXT_TYPE,)
+    FUNCTION = "text_list_to_text"
+
+    CATEGORY = "WAS Suite/Text"
+
+    def text_list_to_text(self, delimiter, text_list):
+        # Handle special case where delimiter is "\n" (literal newline).
+        if delimiter == "\\n":
+            delimiter = "\n"
+
+        merged_text = delimiter.join(text_list)
+
+        return (merged_text,)
+
         
 # Text Parse Embeddings
 
@@ -9844,14 +9882,14 @@ class WAS_Text_Concatenate:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text_a": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "text_b": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "linebreak_addition": (['false', 'true'],),
+                "delimiter": ("STRING", {"default": ", "}),
+                "clean_whitespace": (["true", "false"],),
             },
             "optional": {
+                "text_a": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text_b": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
                 "text_c": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
                 "text_d": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "delimiter": ('STRING', {"forceInput": False}),
             }
         }
 
@@ -9860,26 +9898,34 @@ class WAS_Text_Concatenate:
 
     CATEGORY = "WAS Suite/Text"
 
-    def text_concatenate(self, text_a, text_b, text_c=None, text_d=None, linebreak_addition='false', delimiter=''):
-        # Initialize return_text with text_a
-        return_text = text_a
+    def text_concatenate(self, delimiter, clean_whitespace, **kwargs):
+        text_inputs: list[str] = []
 
-        def append_text(base_text, new_text):
-            if linebreak_addition == 'true':
-                return base_text + "\n" + new_text
-            else:
-                return base_text + delimiter + new_text
+        # Handle special case where delimiter is "\n" (literal newline).
+        if delimiter == "\\n":
+            delimiter = "\n"
 
-        return_text = append_text(return_text, text_b)
+        # Iterate over the received inputs in sorted order.
+        for k in sorted(kwargs.keys()):
+            v = kwargs[k]
 
-        if text_c:
-            return_text = append_text(return_text, text_c)
+            # Only process string input ports.
+            if isinstance(v, str):
+                if clean_whitespace == "true":
+                    # Remove leading and trailing whitespace around this input.
+                    v = v.strip()
 
-        if text_d:
-            return_text = append_text(return_text, text_d)
+                # Only use this input if it's a non-empty string, since it
+                # never makes sense to concatenate totally empty inputs.
+                # NOTE: If whitespace cleanup is disabled, inputs containing
+                # 100% whitespace will be treated as if it's a non-empty input.
+                if v != "":
+                    text_inputs.append(v)
 
-        return (return_text, )
+        # Merge the inputs. Will always generate an output, even if empty.
+        merged_text = delimiter.join(text_inputs)
 
+        return (merged_text,)
 
 
 # Text Search and Replace
@@ -11650,8 +11696,8 @@ class WAS_Image_Bounds_to_Console:
 
     def debug_to_console(self, image_bounds, label):
         label_out = 'Debug to Console'
-        if label.strip() == '':
-            lable_out = label
+        if label.strip() != '':
+            label_out = label
 
         bounds_out = 'Empty'
         if len(bounds_out) > 0:
@@ -13616,6 +13662,7 @@ NODE_CLASS_MAPPINGS = {
     "Text Input Switch": WAS_Text_Input_Switch,
     "Text List": WAS_Text_List,
     "Text List Concatenate": WAS_Text_List_Concatenate,
+    "Text List to Text": WAS_Text_List_to_Text,
     "Text Load Line From File": WAS_Text_Load_Line_From_File, 
     "Text Multiline": WAS_Text_Multiline,
     "Text Parse A1111 Embeddings": WAS_Text_Parse_Embeddings_By_Name,
